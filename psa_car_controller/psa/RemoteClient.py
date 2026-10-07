@@ -356,6 +356,19 @@ class RemoteClient:
         self.publish(msg)
         return True
 
+    def get_preconditioning_program(self, vin):
+        return self.precond_programs.get(vin, DEFAULT_PRECONDITIONING_PROGRAM)
+
+    def set_preconditioning_program(self, vin, programs):
+        # Store the programs so a later immediate preconditioning() keeps them,
+        # and push them to the car. "asap": "deactivate" updates the schedule
+        # without starting an immediate preconditioning session.
+        self.precond_programs[vin] = programs
+        msg = self.mqtt_request(vin, {"asap": "deactivate", "programs": programs}, "/ThermalPrecond")
+        logger.info("set_preconditioning_program: %s", msg)
+        self.publish(msg)
+        return True
+
     def load_otp(self, force_new=False):
         otp_session = load_otp()
         if otp_session is None or force_new:

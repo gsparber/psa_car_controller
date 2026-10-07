@@ -3,7 +3,7 @@ import logging
 from flask import jsonify, request, Response as FlaskResponse
 from pydantic import BaseModel
 
-from psa_car_controller.common.utils import RateLimitException
+from psa_car_controller.common.utils import RateLimitException, validate_preconditioning_programs
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.app import app
@@ -87,6 +87,19 @@ def wakeup(vin):
 @app.route('/preconditioning/<string:vin>/<int:activate>')
 def preconditioning(vin, activate):
     return jsonify(APP.myp.remote_client.preconditioning(vin, activate))
+
+
+# Read (GET) or set (POST) the four preconditioning schedules. The POST body is
+# a JSON object with program1..program4, each {day:[7], hour, minute, on}.
+@app.route('/preconditioning_program/<string:vin>', methods=['GET', 'POST'])
+def preconditioning_program(vin):
+    if request.method == 'POST':
+        try:
+            programs = validate_preconditioning_programs(request.get_json(force=True))
+        except (ValueError, TypeError) as error:
+            return json_response(json.dumps({"error": str(error)}), status=400)
+        return jsonify(APP.myp.remote_client.set_preconditioning_program(vin, programs))
+    return jsonify(APP.myp.remote_client.get_preconditioning_program(vin))
 
 
 @app.route('/position/<string:vin>')
