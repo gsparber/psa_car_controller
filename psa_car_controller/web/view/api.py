@@ -98,7 +98,12 @@ def preconditioning_program(vin):
             programs = validate_preconditioning_programs(request.get_json(force=True))
         except (ValueError, TypeError) as error:
             return json_response(json.dumps({"error": str(error)}), status=400)
-        return jsonify(APP.myp.remote_client.set_preconditioning_program(vin, programs))
+        published = APP.myp.remote_client.set_preconditioning_program(vin, programs)
+        if not published:
+            # The command never reached the car (e.g. the remote token could not
+            # be refreshed). Report it so the caller doesn't treat it as applied.
+            return json_response(json.dumps({"error": "command not sent to vehicle"}), status=502)
+        return jsonify(programs)
     return jsonify(APP.myp.remote_client.get_preconditioning_program(vin))
 
 
