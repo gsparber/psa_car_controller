@@ -356,6 +356,23 @@ class RemoteClient:
         self.publish(msg)
         return True
 
+    def get_preconditioning_program(self, vin):
+        return self.precond_programs.get(vin, DEFAULT_PRECONDITIONING_PROGRAM)
+
+    def set_preconditioning_program(self, vin, programs):
+        # Push the schedule to the car. "asap": "deactivate" updates the stored
+        # programs without starting an immediate preconditioning session. Record
+        # the programs locally only once the publish succeeds, so a command that
+        # never reaches the car (e.g. the remote token can't refresh) doesn't
+        # leave get_preconditioning_program reporting a schedule the car never
+        # received.
+        msg = self.mqtt_request(vin, {"asap": "deactivate", "programs": programs}, "/ThermalPrecond")
+        logger.info("set_preconditioning_program: %s", msg)
+        published = self.publish(msg)
+        if published:
+            self.precond_programs[vin] = programs
+        return published
+
     def load_otp(self, force_new=False):
         otp_session = load_otp()
         if otp_session is None or force_new:

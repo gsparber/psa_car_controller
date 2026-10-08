@@ -72,3 +72,37 @@ def nonblocking(lock):
     finally:
         if locked:
             lock.release()
+
+
+PRECOND_PROGRAM_KEYS = ("program1", "program2", "program3", "program4")
+
+
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def validate_preconditioning_programs(programs):
+    # The car expects exactly four programs. Each has a 7-day flag list (Monday
+    # first), a departure hour/minute and an on flag. hour 34 is the car's
+    # "unset" sentinel, so it is allowed alongside 0-23.
+    if not isinstance(programs, dict):
+        raise ValueError("programs must be an object")
+    validated = {}
+    for key in PRECOND_PROGRAM_KEYS:
+        program = programs.get(key)
+        if not isinstance(program, dict):
+            raise ValueError(f"{key} must be an object")
+        day = program.get("day")
+        if not isinstance(day, list) or len(day) != 7 or any(d not in (0, 1) for d in day):
+            raise ValueError(f"{key}.day must be a list of 7 values of 0 or 1")
+        hour = program.get("hour")
+        if not _is_int(hour) or not (0 <= hour <= 23 or hour == 34):
+            raise ValueError(f"{key}.hour must be 0-23 (or 34 for unset)")
+        minute = program.get("minute")
+        if not _is_int(minute) or not 0 <= minute <= 59:
+            raise ValueError(f"{key}.minute must be 0-59")
+        on = program.get("on")
+        if on not in (0, 1):
+            raise ValueError(f"{key}.on must be 0 or 1")
+        validated[key] = {"day": day, "hour": hour, "minute": minute, "on": on}
+    return validated

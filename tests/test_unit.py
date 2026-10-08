@@ -14,7 +14,8 @@ from psa_car_controller import psa
 from psa_car_controller.common import utils
 from psa_car_controller.common.mylogger import my_logger
 
-from psa_car_controller.common.utils import parse_hour, RateLimitException, rate_limit
+from psa_car_controller.common.utils import parse_hour, RateLimitException, rate_limit, \
+    validate_preconditioning_programs
 from psa_car_controller.psa.otp.otp import load_otp, save_otp
 from psa_car_controller.psa.setup.app_decoder import get_content_from_apk, GITHUB_USER, GITHUB_REPO
 from psa_car_controller.psa.setup.github import github_file_need_to_be_downloaded
@@ -364,6 +365,35 @@ class TestUnit(unittest.TestCase):
         with open(filename, "w") as f:
             f.write(" ")
         assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename) is True
+
+    def test_validate_preconditioning_programs(self):
+        valid = {
+            "program1": {"day": [0, 0, 0, 0, 0, 0, 0], "hour": 34, "minute": 0, "on": 0},
+            "program2": {"day": [1, 1, 1, 1, 1, 0, 0], "hour": 7, "minute": 30, "on": 1},
+            "program3": {"day": [0, 0, 0, 0, 0, 1, 1], "hour": 23, "minute": 59, "on": 0},
+            "program4": {"day": [0, 0, 0, 0, 0, 0, 0], "hour": 34, "minute": 0, "on": 0},
+        }
+        self.assertEqual(valid, validate_preconditioning_programs(valid))
+        # A missing program is rejected.
+        missing = {k: v for k, v in valid.items() if k != "program4"}
+        self.assertRaises(ValueError, validate_preconditioning_programs, missing)
+        # Day list must have exactly 7 flags.
+        bad_day = json.loads(json.dumps(valid))
+        bad_day["program1"]["day"] = [0, 0, 0]
+        self.assertRaises(ValueError, validate_preconditioning_programs, bad_day)
+        # Hour out of range (and not the 34 sentinel) is rejected.
+        bad_hour = json.loads(json.dumps(valid))
+        bad_hour["program2"]["hour"] = 25
+        self.assertRaises(ValueError, validate_preconditioning_programs, bad_hour)
+        # on must be 0 or 1.
+        bad_on = json.loads(json.dumps(valid))
+        bad_on["program2"]["on"] = 2
+        self.assertRaises(ValueError, validate_preconditioning_programs, bad_on)
+        # A bool is not a valid int for hour.
+        bad_bool = json.loads(json.dumps(valid))
+        bad_bool["program2"]["hour"] = True
+        self.assertRaises(ValueError, validate_preconditioning_programs, bad_bool)
+        self.assertRaises(ValueError, validate_preconditioning_programs, [])
 
     def test_car_model_duplication(self):
         car_models = CarModelRepository().models
