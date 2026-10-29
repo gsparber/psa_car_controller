@@ -433,6 +433,35 @@ body {
   width: min(22rem, calc(100vw - 2rem));
 }
 
+/* Follows the last command sent from the UI: sent > car woken up > result (car_access.command_status) */
+.command-status {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 0.75rem);
+  z-index: 1035;
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 1rem;
+  font-size: 0.85rem;
+  background: var(--app-card);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.command-status[hidden] {
+  display: none;
+}
+
+.command-status .command-sep {
+  font-size: 0.7rem;
+  opacity: 0.5;
+}
+
 /* Summary cards on the stats page: two per row on phones instead of one oversized card */
 @media (max-width: 575.98px) {
   #summary-cards > div {
@@ -476,7 +505,8 @@ body {
 }
 
 @media (min-width: 768px) {
-  .app-toast {
+  .app-toast,
+  .command-status {
     bottom: 1.5rem;
   }
 }

@@ -124,3 +124,26 @@ def position(coordinates):
 
 def map_link_url(latitude, longitude):
     return f"https://www.google.com/maps/search/?api=1&query={latitude:.6f},{longitude:.6f}"
+
+
+def maintenance_text(maintenance):
+    """Distance and days left until the next service, e.g. "12 000 km · 150 days"; None when unknown.
+
+    Both can be negative once the service is overdue."""
+    if not maintenance:
+        return None
+    parts = []
+    mileage, days = maintenance.get("mileage"), maintenance.get("days")
+    if _is_number(mileage):
+        parts.append(format_int(mileage, "km") if mileage >= 0 else f"{format_int(-mileage, 'km')} overdue")
+    if _is_number(days):
+        unit = "day" if abs(days) == 1 else "days"
+        parts.append(f"{format_int(days, unit)}" if days >= 0 else f"{format_int(-days, unit)} overdue")
+    return " · ".join(parts) or None
+
+
+def privacy_text(state):
+    """Note for the car's private mode, None when the car shares its data."""
+    if state == "Full":
+        return "Private mode is on in the car: position and live data are paused"
+    return None

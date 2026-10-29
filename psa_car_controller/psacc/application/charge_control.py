@@ -9,7 +9,7 @@ from time import sleep
 import pytz
 
 from psa_car_controller.psa.constants import DISCONNECTED, INPROGRESS, FINISHED, STOPPED
-from psa_car_controller.common.utils import RateLimitException
+from psa_car_controller.common.utils import RateLimitException, parse_hour
 from .psa_client import PSAClient
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 class ChargeControl:
     MQTT_TIMEOUT = 60
+    # most minutes between two wakeups of a charging car (wakeup_timeout is the fewest): far from
+    # the threshold they get rarer (#1130: a slow charge doesn't update the api for a long time,
+    # and waking the car up every refresh only drains its 12V battery)
+    MAX_WAKEUP_TIMEOUT = 60
 
     def __init__(self, psacc: PSAClient, vin, percentage_threshold, stop_hour):
         self.vin = vin
@@ -25,6 +29,7 @@ class ChargeControl:
         self.psacc = psacc
         self.retry_count = 0
         self.wakeup_timeout = 10
+        self._last_wakeup = None
 
     def set_stop_hour(self, stop_hour):
         if stop_hour is None or stop_hour == [0, 0]:
@@ -56,21 +61,58 @@ class ChargeControl:
         return True
 
     def force_update(self, vehicle_status):
-        charging_mode = vehicle_status.get_energy('Electric').charging.charging_mode
-        quick_refresh = isinstance(charging_mode, str) and charging_mode == "Quick"
-
-        # force update if the car doesn't send info during 10 minutes
+        # force update if the car doesn't send info during wakeup_interval() minutes. The time of
+        # the last wakeup counts too: a car which doesn't answer keeps the old updated_at, so it was
+        # woken up again on every refresh until the wakeup rate limit stopped it (#1130).
+        now = datetime.utcnow().replace(tzinfo=pytz.UTC)
         last_update = self.psacc.vehicles_list.get_car_by_vin(self.vin).get_status().get_energy('Electric').updated_at
-        if quick_refresh:
-            wakeup_timeout = self.wakeup_timeout / 2
+        minutes_since_update = (now - last_update).total_seconds() / 60
+        interval = self.wakeup_interval(vehicle_status, minutes_since_update)
+        if minutes_since_update <= interval:
+            return
+        if self._last_wakeup is not None and (now - self._last_wakeup).total_seconds() <= 60 * interval:
+            return
+        try:
+            if self.psacc.remote_client.wakeup(self.vin):
+                self._last_wakeup = now
+        except RateLimitException as e:
+            # expected when the car is woken up too often, no need for a traceback
+            logger.warning("Can't wake up %s: %s", self.vin, e)
+
+    def wakeup_interval(self, vehicle_status, minutes_since_update=0):
+        """Minutes without news from the charging car before waking it up.
+
+        Half of the estimated time left until the threshold is reached: the car is woken up rarely
+        while the threshold is far away and more and more often when it gets close.
+        """
+        electric = vehicle_status.get_energy('Electric')
+        charging_mode = electric.charging.charging_mode
+        if isinstance(charging_mode, str) and charging_mode == "Quick":
+            min_timeout = self.wakeup_timeout / 2
         else:
-            wakeup_timeout = self.wakeup_timeout
-        if (datetime.utcnow().replace(tzinfo=pytz.UTC) - last_update).total_seconds() > 60 * wakeup_timeout:
-            try:
-                self.psacc.remote_client.wakeup(self.vin)
-            except RateLimitException as e:
-                # expected when the car is woken up too often, no need for a traceback
-                logger.warning("Can't wake up %s: %s", self.vin, e)
+            min_timeout = self.wakeup_timeout
+        max_timeout = max(min_timeout, self.MAX_WAKEUP_TIMEOUT)
+        if self.percentage_threshold >= 100:
+            # only a stop hour (or nothing) to enforce: it doesn't depend on the battery level
+            return max_timeout
+        minutes_to_threshold = self._minutes_to_threshold(electric)
+        if minutes_to_threshold is None:
+            return min_timeout
+        return min(max(min_timeout, (minutes_to_threshold - minutes_since_update) / 2), max_timeout)
+
+    def _minutes_to_threshold(self, electric):
+        """Estimated from the remaining time to a full battery; None if it can't be estimated."""
+        try:
+            level = float(electric.level)
+            remaining = parse_hour(electric.charging.remaining_time)
+            remaining_minutes = remaining[0] * 60 + remaining[1] + remaining[2] / 60
+        except (AttributeError, TypeError, ValueError, IndexError):
+            return None
+        if remaining_minutes <= 0 or level >= 100 or level >= self.percentage_threshold:
+            return None
+        # charging slows down near 100 %, so below the threshold the car charges faster than this
+        # linear estimate: wakeup_interval() only waits for half of it
+        return (self.percentage_threshold - level) * remaining_minutes / (100 - level)
 
     def __is_approaching_scheduled_time(self, now: datetime):
         scheduled_hour, scheduled_minute = self.psacc.remote_client.get_charge_hour(self.vin)
@@ -121,6 +163,7 @@ class ChargeControl:
     def get_dict(self):
         chd = copy(self.__dict__)
         chd.pop("psacc")
+        chd.pop("_last_wakeup")
         return chd
 
 

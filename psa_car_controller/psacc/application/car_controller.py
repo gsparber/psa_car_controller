@@ -19,6 +19,7 @@ from psa_car_controller.psacc.utils.utils import Singleton
 from .psa_client import PSAClient
 from psa_car_controller.common.mylogger import my_logger
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME, ConfigException
+from psa_car_controller.psa.status_schema import enable_raw_status_log
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller import __version__
 
@@ -42,6 +43,8 @@ def parse_args():
     parser.add_argument("--offline", help="offline limited mode", action='store_true')
     parser.add_argument("--web-conf", help="ignore if config files not existing yet", action='store_true')
     parser.add_argument("-b", "--base-path", help="base path for web app", default="/")
+    parser.add_argument("--log-raw-status", action='store_true',
+                        help="log the raw vehicle status from the API once per vehicle (position and ids hidden)")
     parser.add_argument('--version', action='version', version='PSACC {}'.format(psa_car_controller.__version__))
 
     return parser.parse_args()
@@ -88,6 +91,7 @@ class PSACarController(metaclass=Singleton):
 
     def load_app(self) -> bool:
         my_logger(handler_level=int(self.args.debug))
+        enable_raw_status_log(getattr(self.args, "log_raw_status", False))
 
         logger.info("App version %s", __version__)
         if self.args.config:

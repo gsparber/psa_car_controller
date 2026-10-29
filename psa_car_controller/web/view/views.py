@@ -35,7 +35,7 @@ from psa_car_controller.web.view.climate import get_climate_layout
 from psa_car_controller.web.view.insights import get_insights_layout, set_trips_provider
 from psa_car_controller.web.view.settings import get_settings_layout
 from psa_car_controller.web.view.log import get_log_layout
-from psa_car_controller.web.view.car_access import pending_store
+from psa_car_controller.web.view.car_access import command_status, pending_store
 from psa_car_controller.web.view import ui
 
 from psa_car_controller import __version__
@@ -423,6 +423,7 @@ except (IndexError, TypeError, AttributeError):
 dash_app.layout = dbc.Container(fluid=True, children=[dcc.Location(id='url', refresh=False),
                                                       html.Div(id='page-content'),
                                                       pending_store(),
+                                                      command_status(),
                                                       dcc.Store(id=THEME_STORE),
                                                       ui.toast()],
                                 className="app-root")

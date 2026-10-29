@@ -11,8 +11,8 @@ from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import status_text, ui
-from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    is_charging, is_pending, is_preconditioning, read, remote_ready
+from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, \
+    command_supported, get_car, is_charging, is_pending, is_preconditioning, maintenance, read, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +80,19 @@ def _hero(car: Car, remote):
     else:
         ring = _soc_ring(fuel.level, fuel.autonomy)
     picture = _picture(car)
+    privacy = status_text.privacy_text(read(lambda: car.status.privacy.state))
+    refresh = action_button("refresh", car.vin, html.I(className="bi bi-arrow-clockwise"), color="link",
+                            className="ms-auto icon-button", disabled=not remote,
+                            title="Ask the car for a fresh status") \
+        if command_supported(car.vin, "/VehCharge/state") else None
     return html.Div([
         html.Div([
             html.Div([html.H2(car.label or car.vin, className="h5 mb-0"),
                       html.Small(subtitle, className="text-body-secondary")]),
-            action_button("refresh", car.vin, html.I(className="bi bi-arrow-clockwise"), color="link",
-                          className="ms-auto icon-button", disabled=not remote,
-                          title="Ask the car for a fresh status"),
+            refresh,
         ], className="d-flex align-items-start"),
+        html.Div([html.I(className="bi bi-incognito me-1"), privacy],
+                 className="text-center text-body-secondary small privacy-line") if privacy else None,
         html.Div([picture, ring], className="hero-visual" + (" with-picture" if picture is not None else "")),
         html.Div([html.I(className="bi bi-lightning-charge-fill me-1" if is_charging(car) else "bi bi-plug me-1"),
                   charging], className="text-center charging-line") if charging else None,
@@ -104,12 +109,13 @@ def _tiles(car: Car, remote, pending):
     if failure:
         precond_label = status_text.precond_failure_text(failure)
     tiles = []
-    if car.has_battery():
+    if car.has_battery() and command_supported(car.vin, "/VehCharge"):
         tiles.append(_tile("charge", car.vin, "bi-ev-station", "Stop charging" if charging_now else "Charge now",
                            "Charging" if charging_now else "Not charging", active=charging_now,
                            pending=is_pending(pending, car.vin, "charge", charging_now), disabled=not remote))
-    tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
-                       pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
+    if command_supported(car.vin, "/ThermalPrecond"):
+        tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
+                           pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
     actions = html.Div(tiles, className="home-tiles")
     if not remote:
         return html.Div([actions, html.Small(["Remote control is not set up. ",
@@ -121,6 +127,9 @@ def _tiles(car: Car, remote, pending):
 def _info(car: Car):
     info = [ui.info_row("bi-speedometer2", "Mileage",
                         status_text.format_int(read(lambda: car.status.timed_odometer.mileage), "km"))]
+    service = status_text.maintenance_text(maintenance(car.vin))
+    if service:
+        info.append(ui.info_row("bi-wrench-adjustable", "Next service", service))
     if car.has_battery():
         soh = read(lambda: Database.get_last_soh_by_vin(car.vin))
         if soh:

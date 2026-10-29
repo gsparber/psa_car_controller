@@ -6,7 +6,7 @@ from paho.mqtt.client import MQTTMessage
 
 from psa_car_controller.psa.RemoteClient import MQTT_RESP_TOPIC
 from psa_car_controller.psa.remote_commands import RemoteCommands, REASON_NOT_COMPATIBLE, SENT, SUCCESS, \
-    FAILED, NOT_COMPATIBLE, RETRIED
+    FAILED, NOT_COMPATIBLE, RETRIED, WOKEN_UP
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from tests.test_remote_commands import get_ready_remote_client, VIN
 
@@ -104,8 +104,9 @@ class TestCommandAnswers(unittest.TestCase):
     def test_success_and_failure_codes(self):
         horn_id, lights_id = self.send_horn_and_lights()
 
-        self.rc._on_mqtt_message(None, None, answer(horn_id, "901"))
         self.assertEqual(SENT, self.rc.commands.get(horn_id).status)
+        self.rc._on_mqtt_message(None, None, answer(horn_id, "901"))
+        self.assertEqual(WOKEN_UP, self.rc.commands.get(horn_id).status)
         self.rc._on_mqtt_message(None, None, answer(horn_id, "0"))
         self.rc._on_mqtt_message(None, None, answer(lights_id, "113", vin=OTHER_VIN))
 

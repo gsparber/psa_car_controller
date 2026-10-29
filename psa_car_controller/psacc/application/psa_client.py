@@ -1,5 +1,6 @@
 import json
 import threading
+from copy import copy
 from datetime import datetime, timedelta, timezone
 from json import JSONEncoder
 from hashlib import md5
@@ -13,9 +14,12 @@ from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.model.car import Cars, Car, EMPTY_STATUS_LIMIT
 from psa_car_controller.psacc.model.car_status import status_updated_at
 from psa_car_controller.psacc.application.charging import Charging
+from psa_car_controller.psacc.application.command_refresh import CommandStatusRefresh
+from psa_car_controller.psacc.application.vehicle_services import VehicleServices
 from psa_car_controller.psa.AccountInformation import AccountInformation
 from psa_car_controller.psa.RemoteClient import RemoteClient
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
+from psa_car_controller.psa.extra_api import API_ROOT, ExtraApi
 from psa_car_controller.psa.oauth import OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient
 from .ecomix import Ecomix
 from psa_car_controller.psa.constants import realm_info, AUTHORIZE_SERVICE, INPROGRESS
@@ -63,6 +67,8 @@ class PSAClient:
     _refresh_started = False
     _rate_limited = False
     _rate_limit_backoff = 0
+    command_refresh: CommandStatusRefresh = None
+    vehicle_services: VehicleServices = None
 
     def connect(self, code: str):
         self.manager.connect_with_code(code)
@@ -110,6 +116,10 @@ class PSAClient:
                                           self.vehicles_list,
                                           self.manager,
                                           remote_credentials)
+        # show the result of a command without waiting for the next regular refresh
+        self.command_refresh = CommandStatusRefresh(self._refresh_after_command, self._is_rate_limited)
+        self.remote_client.command_callbacks.append(self.command_refresh.on_command)
+        self.vehicle_services = VehicleServices(lambda: ExtraApi(self.root_api_client()))
         sensitive_filter.add_source(self.sensitive_values)
 
     def sensitive_values(self):
@@ -134,7 +144,7 @@ class PSAClient:
         self.api_config.access_token = self.manager.access_token
         return True
 
-    def api(self) -> VehiclesApi:
+    def _check_access_token(self):
         if self.manager.rejected_grant_retry_due():
             try:
                 self.manager.refresh_token_now()
@@ -143,10 +153,27 @@ class PSAClient:
         if not self.is_authenticated():
             # don't call PSA with a token it already refused, until a new login
             raise AuthenticationRequiredException()
-        access_token = self.manager.access_token
-        self.api_config.access_token = access_token
+        self.api_config.access_token = self.manager.access_token
+
+    def api(self) -> VehiclesApi:
+        self._check_access_token()
         api_instance = VehiclesApi(OauthAPIClient(self.api_config))
         return api_instance
+
+    def root_api_client(self) -> OauthAPIClient:
+        """Client for the endpoints outside /connectedcar/v4 (vehicle rights), with the same credentials."""
+        self._check_access_token()
+        config = copy(self.api_config)
+        config.host = API_ROOT
+
+        def refresh(rejected_access_token):
+            if not self._refresh_api_token(rejected_access_token):
+                return False
+            config.access_token = self.manager.access_token
+            return True
+
+        config.set_refresh_callback(refresh)
+        return OauthAPIClient(config)
 
     def set_proxies(self, proxies):
         if proxies is None:
@@ -188,6 +215,18 @@ class PSAClient:
             logger.error("No status of %s from the API for %d requests, the last one is outdated", car.vin, failures)
         return car.status
 
+    def _is_rate_limited(self) -> bool:
+        return self._rate_limited or self._rate_limit_backoff > 0
+
+    def _refresh_after_command(self, vin):
+        try:
+            self.get_vehicle_info(vin)
+        except RateLimitException as e:
+            logger.warning("status refresh after a command: %s", e)
+            self._rate_limited = True
+        except AuthenticationRequiredException:
+            logger.debug("status refresh after a command: not connected")
+
     @staticmethod
     def _log_status_error(car: Car, ex: ApiException) -> bool:
         """Log a failed status request, return whether asking again right away can help."""
@@ -219,7 +258,7 @@ class PSAClient:
                 pass
         car.status = status
         # a new status wipes anything mqtt filled in, so put it back
-        self.remote_client.apply_lock_state(car)
+        self.remote_client.apply_mqtt_state(car)
         # the same status again would only record the same data again
         if self._record_enabled and newer:
             self.record_info(car)
@@ -239,6 +278,7 @@ class PSAClient:
             logger.debug("refresh_vehicle_info: not connected")
         except BaseException:
             logger.exception("refresh_vehicle_info: ")
+        self._refresh_vehicle_services()
         # scheduled once the status is known: the delay depends on it
         self.__schedule_refresh()
         try:
@@ -248,6 +288,31 @@ class PSAClient:
             logger.debug("refresh_vehicle_info: not connected")
         except BaseException:
             logger.exception("refresh_vehicle_info: ")
+
+    def _refresh_vehicle_services(self):
+        """Maintenance and rights, they are only asked for once a day: no extra request at each refresh."""
+        if self.vehicle_services is None or self._is_rate_limited():
+            return
+        try:
+            for car in self.vehicles_list:
+                if not self.vehicle_services.refresh(car):
+                    self._rate_limited = True
+                    break
+        except BaseException:  # pylint: disable=broad-except
+            logger.exception("refresh_vehicle_services: ")
+
+    def get_stellantis_trips(self, car: Car, since=None, max_pages=1):
+        """Trips as Stellantis recorded them, apart from the ones computed from the recorded positions."""
+        if self._is_rate_limited():
+            raise RateLimitException("stellantis trips")
+        try:
+            return self.vehicle_services.trips(car.vehicle_id, since, max_pages)
+        except ApiException as ex:
+            if ex.status == TOO_MANY_REQUESTS:
+                # the status refresh waits longer too
+                self._rate_limited = True
+                raise RateLimitException("stellantis trips") from ex
+            raise
 
     def __schedule_refresh(self):
         if self.info_refresh_rate is None:  # stopped meanwhile
@@ -292,6 +357,8 @@ class PSAClient:
         if self.refresh_thread is not None:
             self.refresh_thread.cancel()
         self.manager.stop_scheduled_refresh()
+        if self.command_refresh is not None:
+            self.command_refresh.stop()
         self.remote_client.stop()
 
     def get_vehicles(self):
@@ -299,6 +366,9 @@ class PSAClient:
             res = self.api().get_vehicles_by_device()
             for vehicle in res.embedded.vehicles:
                 self.vehicles_list.add(Car(vehicle.vin, vehicle.id, vehicle.brand, vehicle.label))
+                if self.vehicle_services is not None:
+                    self.vehicle_services.set_maintenance_href(
+                        vehicle.vin, getattr(getattr(vehicle.links, "maintenance", None), "href", None))
             self.vehicles_list.save_cars()
         except (ApiException, HTTPError):
             logger.exception("get_vehicles:")

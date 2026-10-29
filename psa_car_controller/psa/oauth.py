@@ -1,5 +1,6 @@
 import logging
 import hashlib
+import json
 import secrets
 import base64
 import random
@@ -17,6 +18,7 @@ from psa_car_controller.common.utils import rate_limit, RateLimitException, TIME
 from psa_car_controller.psa import connected_car_api
 from psa_car_controller.psa.connected_car_api import ApiClient
 from psa_car_controller.psa.connected_car_api.rest import ApiException
+from psa_car_controller.psa.status_schema import STATUS_RESPONSE_TYPE, prepare_status
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +251,15 @@ class Oauth2PSACCApiConfig(connected_car_api.Configuration):
 
 
 class OauthAPIClient(ApiClient):
+    def deserialize(self, response, response_type):
+        if response_type != STATUS_RESPONSE_TYPE:
+            return super().deserialize(response, response_type)
+        try:
+            data = json.loads(response.data)
+        except ValueError:
+            data = response.data
+        return self._ApiClient__deserialize(prepare_status(data), response_type)  # pylint: disable=no-member
+
     # pylint: disable=no-member,too-many-arguments,too-many-positional-arguments,too-many-locals
     def call_api(self, resource_path, method,
                  path_params=None, query_params=None, header_params=None,

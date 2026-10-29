@@ -87,17 +87,17 @@ class TestMqttLockState(unittest.TestCase):
 
     def test_locked(self):
         self._send_event(1)
-        self.assertEqual("Locked", self.remote_client.lock_state[self.VIN])
+        self.assertEqual("Locked", self.remote_client.vehicle_events[self.VIN].lock_state)
         self.assertEqual(["Locked"], self.car.status.doors_state.locked_state)
 
     def test_unlocked(self):
         self._send_event(3)
-        self.assertEqual("Unlocked", self.remote_client.lock_state[self.VIN])
+        self.assertEqual("Unlocked", self.remote_client.vehicle_events[self.VIN].lock_state)
         self.assertEqual(["Unlocked"], self.car.status.doors_state.locked_state)
 
     def test_unknown_value_is_not_guessed(self):
         self._send_event(2)
-        self.assertNotIn(self.VIN, self.remote_client.lock_state)
+        self.assertIsNone(self.remote_client.vehicle_events[self.VIN].lock_state)
         self.assertIsNone(self.car.status.doors_state)
 
     def test_null_doors_state(self):
@@ -106,17 +106,24 @@ class TestMqttLockState(unittest.TestCase):
         msg.payload = b'{"precond_state":{},"charging_state":{"remaining_time":0,"rate":0},' \
                       b'"doors_state":null,"vin":"%s"}' % self.VIN.encode("utf-8")
         self.remote_client._on_mqtt_message(None, None, msg)
-        self.assertEqual({}, self.remote_client.lock_state)
+        self.assertIsNone(self.remote_client.vehicle_events[self.VIN].lock_state)
 
     def test_event_without_doors_state(self):
         msg = MQTTMessage(topic=(MQTT_EVENT_TOPIC + self.VIN).encode("utf-8"))
         msg.payload = b'{"precond_state":{},"charging_state":{"remaining_time":0,"rate":0},"vin":"%s"}' \
                       % self.VIN.encode("utf-8")
         self.remote_client._on_mqtt_message(None, None, msg)
-        self.assertEqual({}, self.remote_client.lock_state)
+        self.assertIsNone(self.remote_client.vehicle_events[self.VIN].lock_state)
 
-    def test_mqtt_overwrites_api_value(self):
-        # mqtt is live, the rest api lags behind it, so mqtt wins on conflict
+    def test_mqtt_change_overwrites_api_value(self):
+        # mqtt is live, the rest api lags behind it, so a change seen on mqtt wins on conflict
         self.car.status.doors_state = DoorsState(locked_state=["Locked"])
+        self._send_event(1)
         self._send_event(3)
         self.assertEqual(["Unlocked"], self.car.status.doors_state.locked_state)
+
+    def test_first_event_does_not_overwrite_api_value(self):
+        # events repeat old values with a new date: without a change the api is trusted
+        self.car.status.doors_state = DoorsState(locked_state=["Locked"])
+        self._send_event(3)
+        self.assertEqual(["Locked"], self.car.status.doors_state.locked_state)

@@ -1,15 +1,21 @@
 import logging
 
 import os
+from datetime import datetime
+from functools import wraps
 
-from flask import abort, jsonify, request, send_file, Response as FlaskResponse
+from flask import abort, jsonify, make_response, request, send_file, Response as FlaskResponse
 from pydantic import BaseModel
 
 from oauth2_client.credentials_manager import OAuthError
 
 from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException, \
     validate_preconditioning_programs
+from urllib3.exceptions import HTTPError
+
 from psa_car_controller.psa.RemoteClient import RemoteException
+from psa_car_controller.psa.connected_car_api.rest import ApiException
+from psa_car_controller.psacc.application.vehicle_services import MAX_TRIPS_PAGES, UNSUPPORTED_STATUSES
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.health import get_health, get_max_mqtt_auth_failures
 from psa_car_controller.psacc.repository.db import Database
@@ -37,6 +43,22 @@ def json_response(json: str, status=200):
         status=status,
         mimetype='application/json'
     )
+
+
+# correlation id of the command a remote control endpoint sent: look its status up on /command/<id>
+CORRELATION_ID_HEADER = "X-Correlation-Id"
+
+
+def tracks_command(view):
+    """Add the correlation id of the command the view publishes as a header, the body stays as it was."""
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        with APP.myp.remote_client.track_commands() as sent:
+            response = make_response(view(*args, **kwargs))
+        if sent:
+            response.headers[CORRELATION_ID_HEADER] = sent[-1]
+        return response
+    return wrapper
 
 
 @app.errorhandler(AuthenticationRequiredException)
@@ -113,11 +135,13 @@ def get_style():
 
 
 @app.route('/charge_now/<string:vin>/<int:charge>')
+@tracks_command
 def charge_now(vin, charge):
     return jsonify(APP.myp.remote_client.charge_now(vin, charge != 0))
 
 
 @app.route('/charge_hour')
+@tracks_command
 def change_charge_hour():
     return jsonify(APP.myp.remote_client.change_charge_hour(request.args['vin'],
                                                             request.args['hour'],
@@ -125,6 +149,7 @@ def change_charge_hour():
 
 
 @app.route('/wakeup/<string:vin>')
+@tracks_command
 def wakeup(vin):
     try:
         return jsonify(APP.myp.remote_client.wakeup(vin))
@@ -133,6 +158,7 @@ def wakeup(vin):
 
 
 @app.route('/preconditioning/<string:vin>/<int:activate>')
+@tracks_command
 def preconditioning(vin, activate):
     try:
         return jsonify(APP.myp.remote_client.preconditioning(vin, activate))
@@ -143,6 +169,7 @@ def preconditioning(vin, activate):
 # Read (GET) or set (POST) the four preconditioning schedules. The POST body is
 # a JSON object with program1..program4, each {day:[7], hour, minute, on}.
 @app.route('/preconditioning_program/<string:vin>', methods=['GET', 'POST'])
+@tracks_command
 def preconditioning_program(vin):
     if request.method == 'POST':
         try:
@@ -215,14 +242,30 @@ def abrp():
     return jsonify(dict(APP.myp.abrp))
 
 
+@app.route('/commands/<string:vin>')
+def get_commands(vin):
+    """Commands sent to the car within the last hour, oldest first, with the answers of the car."""
+    return jsonify(APP.myp.remote_client.commands.to_list(vin))
+
+
+@app.route('/command/<string:correlation_id>')
+def get_command(correlation_id):
+    command = APP.myp.remote_client.commands.get_dict(correlation_id)
+    if command is None:
+        return jsonify({"error": "unknown_command", "message": "No command with this id in the last hour"}), 404
+    return jsonify(command)
+
+
 @app.after_request
 def after_request(response):
     header = response.headers
     header['Access-Control-Allow-Origin'] = '*'
+    header['Access-Control-Expose-Headers'] = CORRELATION_ID_HEADER
     return response
 
 
 @app.route('/horn/<string:vin>/<int:count>')
+@tracks_command
 def horn(vin, count):
     try:
         return jsonify(APP.myp.remote_client.horn(vin, count))
@@ -231,6 +274,7 @@ def horn(vin, count):
 
 
 @app.route('/lights/<string:vin>/<int:duration>')
+@tracks_command
 def lights(vin, duration):
     try:
         return jsonify(APP.myp.remote_client.lights(vin, duration))
@@ -239,6 +283,7 @@ def lights(vin, duration):
 
 
 @app.route('/lock_door/<string:vin>/<int:lock>')
+@tracks_command
 def lock_door(vin, lock):
     try:
         return jsonify(APP.myp.remote_client.lock_door(vin, lock))
@@ -269,6 +314,42 @@ def get_trips():
     except (IndexError, TypeError, KeyError):
         logger.debug("Failed to get trips, there is probably not enough data yet:", exc_info=True)
         return jsonify([])
+
+
+@app.route('/vehicle_services/<string:vin>')
+def get_vehicle_services(vin):
+    car = APP.myp.vehicles_list.get_car_by_vin(vin)
+    if car is None:
+        return jsonify({"error": "unknown_vin"}), 404
+    body = APP.myp.vehicle_services.to_dict(vin)
+    privacy = getattr(getattr(car.status, "privacy", None), "state", None)
+    body["privacy"] = privacy
+    return jsonify(body)
+
+
+@app.route('/vehicles/<string:vin>/stellantis_trips')
+def get_stellantis_trips(vin):
+    car = APP.myp.vehicles_list.get_car_by_vin(vin)
+    if car is None:
+        return jsonify({"error": "unknown_vin"}), 404
+    try:
+        since = request.args.get("since")
+        since = datetime.fromisoformat(since) if since else None
+        max_pages = min(max(int(request.args.get("max_pages", 1)), 1), MAX_TRIPS_PAGES)
+    except ValueError as e:
+        return jsonify({"error": "invalid_argument", "message": str(e)}), 400
+    try:
+        return jsonify(APP.myp.get_stellantis_trips(car, since, max_pages))
+    except RateLimitException as e:
+        return jsonify({"error": "rate_limited", "message": str(e)}), 429
+    except ApiException as e:
+        if e.status in UNSUPPORTED_STATUSES:
+            return jsonify({"error": "not_available", "message": f"HTTP {e.status} from the API"}), 404
+        logger.warning("stellantis trips of %s: HTTP %s %s", vin, e.status, e.reason)
+        return jsonify({"error": "api_error", "message": f"HTTP {e.status} from the API"}), 502
+    except (HTTPError, ValueError) as e:
+        logger.warning("stellantis trips of %s: %s", vin, e)
+        return jsonify({"error": "api_error", "message": str(e)}), 502
 
 
 @app.route('/vehicles/chargings')

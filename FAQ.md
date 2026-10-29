@@ -84,3 +84,18 @@ Don't open an issue, possible fix:
 - https://github.com/flobz/psa_car_controller/issues/576#issuecomment-1631962500
 ### 10. No car position:
 Look at this solution: https://github.com/flobz/psa_car_controller/issues/714#issuecomment-1868959995
+### 11. Missing battery or charging data: check the raw status of the API
+The API is moving the energy data from the deprecated `energy` list to a new `energies` list
+(API changelog v4.10.1). PSACC reads `energy`, and falls back to `energies` when a status has no `energy` list.
+To check what the API sends for your car, start PSACC once with `--log-raw-status`
+(Docker: add it to `PSACC_OPTIONS`). The first status of each car is then logged as JSON, at the info level,
+with the position, the links and ids replaced by `***` (tokens and VINs are masked by the log filter as usual).
+Look for:
+- `energy` and `energies`: which of the two lists is there, and whether they hold the same values
+- `energies[].extension.electric.charging`: `status`, `plugged`, `chargingRate`, `remainingTime`, `nextDelayedTime`, `schedule`
+- any field that looks like a charge limit (e.g. `chargingPowerLevel`, a target level in `schedule`)
+
+Check the log before sharing it in an issue, and remove the option afterwards.
+The charge limit of PSACC (`-c`) doesn't come from the API: PSACC stops the charge itself when the car reaches
+the limit, using the delayed charge of the car, so the car needs to be reachable to stop
+(see [#912](https://github.com/flobz/psa_car_controller/issues/912), [#1209](https://github.com/flobz/psa_car_controller/issues/1209)).

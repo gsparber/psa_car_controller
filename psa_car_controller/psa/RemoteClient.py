@@ -3,33 +3,33 @@ import logging
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from os import environ
-from typing import Optional
+from typing import Callable, List, Optional
 
 import paho.mqtt.client as mqtt
 from requests import RequestException, Timeout
 
 from psa_car_controller.psacc.model.car import Cars
+from psa_car_controller.psacc.model.car_status import status_updated_at
 from psa_car_controller.psa.AccountInformation import AccountInformation
-from psa_car_controller.psa.connected_car_api.models.doors_state import DoorsState
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.constants import INPROGRESS, DEFAULT_PRECONDITIONING_PROGRAM, IMMEDIATE_CHARGE, \
     DELAYED_CHARGE, REMOTE_URL
 from psa_car_controller.psa import precond_programs
+from psa_car_controller.psa.mqtt_client import MqttClient
+from psa_car_controller.psa.mqtt_event import VehicleEvents, CHANGED, OUT_OF_ORDER, parse_event_date, \
+    rest_charging_status
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.oauth import OpenIdCredentialManager
-from psa_car_controller.psa.remote_commands import RemoteCommands, RC_SUCCESS, RC_TOKEN_EXPIRED, \
-    REASON_NOT_COMPATIBLE, FAILED, RETRIED
+from psa_car_controller.psa.remote_commands import RemoteCommand, RemoteCommands, RC_SUCCESS, \
+    RC_TOKEN_EXPIRED, RC_WAKEUP_FORWARDED, REASON_NOT_COMPATIBLE, FAILED, RETRIED
 from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S
 from psa_car_controller.psa.otp.otp import ConfigException, save_otp, load_otp
 
 logger = logging.getLogger(__name__)
 
-# mqtt reports the lock state as an int, unlike the rest api's DoorsState.lockedState enum.
-# Only these two values have been observed on a real car (an Opel Mokka Electric, confirmed
-# against the /Doors command responses).
-MQTT_DOORS_LOCKING_STATE = {1: "Locked", 3: "Unlocked"}
 MQTT_SERVER = "mwa.mpsa.com"
 MQTT_RESP_TOPIC = "psa/RemoteServices/to/cid/"
 MQTT_EVENT_TOPIC = "psa/RemoteServices/events/MPHRTServices/"
@@ -51,6 +51,12 @@ KEEPALIVE_RETRY_PERIOD = 1800
 # it (keyless entry stops working). Same limit as the Home Assistant integration, per car.
 WAKEUP_LIMIT = 6
 WAKEUP_PERIOD = 60 * 20
+# When a charge begins, the api sometimes keeps reporting no charge: the car is woken up after
+# API_UPDATE_DELAY to make it send its status again. Some cars (seen with slow charges, #1130)
+# answer every wakeup with a new charging event while the api never catches up, so the delay
+# doubles after each wakeup which didn't help, up to API_UPDATE_MAX_DELAY.
+API_UPDATE_DELAY = 60
+API_UPDATE_MAX_DELAY = 30 * 60
 # the SMS endpoint regularly takes longer than the default timeout to answer
 SMS_TIMEOUT_IN_S = 20
 
@@ -120,7 +126,9 @@ class RemoteClient:
         self.remoteCredentials: RemoteCredentials = remoteCredentials
         self.manager = manager
         self.precond_programs = {}
-        self.lock_state = {}
+        # vehicle events received on mqtt, by vin
+        self.vehicle_events = {}
+        self._vehicle_events_lock = threading.Lock()
         self.account_info = account_info
         self.headers = {
             "x-introspect-realm": self.account_info.realm,
@@ -129,12 +137,18 @@ class RemoteClient:
         }
         # commands sent recently, by correlation_id: their answers are matched against them
         self.commands = RemoteCommands()
+        # called with the command after each answer to it, e.g. to fetch the new status after a success
+        self.command_callbacks: List[Callable[[RemoteCommand], None]] = []
+        # correlation ids published by the current thread inside track_commands()
+        self._tracked = threading.local()
         self.mqtt_client = None
         self.otp = None
         self._lock = threading.Lock()
         self.update_thread: threading.Timer = None
         self._api_update_lock = threading.Lock()
         self._api_update_timers = {}
+        # wakeups sent in a row because of charging events which the api didn't catch up with
+        self._api_update_attempts = {}
         self._api_update_stopped = False
         self.remote_token_last_update: Optional[datetime] = None
         # consecutive disconnects because the broker refused the remote credentials, reset on a
@@ -180,23 +194,31 @@ class RemoteClient:
                     self._on_command_answer(data)
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
                 charge_info = data["charging_state"]
-                programs = data["precond_state"].get("programs", None)
-                if programs:
-                    self._store_precond_programs(data["vin"], programs)
-                self._store_lock_state(data)
-            self._fix_not_updated_api(charge_info, data["vin"])
+                if not self._on_vehicle_event(data):
+                    return
+            self._fix_not_updated_api(charge_info, data["vin"], data.get("date"))
         except KeyError:
             logger.exception("on_mqtt_message:")
 
     def _on_command_answer(self, data):
         return_code = str(data["return_code"])
         reason = data.get("reason")
-        command = self.commands.answer(data.get("correlation_id"), return_code, reason)
+        command = self.commands.answer(data.get("correlation_id"), return_code, reason, data.get("resp_data"))
         name = command.name if command else "unknown command"
+        try:
+            self._handle_command_answer(command, name, return_code, reason)
+        finally:
+            if command is not None:
+                self._notify_command(command)
+
+    def _handle_command_answer(self, command, name, return_code, reason):
         if return_code == RC_SUCCESS:
             return
-        if return_code != RC_TOKEN_EXPIRED:
-            logger.error("mqtt error %s : %s (%s)", return_code, reason or "?", name)
+        if return_code == RC_WAKEUP_FORWARDED:
+            logger.info("%s: wakeup forwarded to the car, waiting for its answer", name)
+        elif return_code != RC_TOKEN_EXPIRED:
+            error = command.error if command is not None and command.error else reason
+            logger.error("mqtt error %s : %s (%s)", return_code, error or "?", name)
         elif reason == REASON_NOT_COMPATIBLE:
             logger.error("%s isn't supported by this car: %s", name, reason)
         elif command is None:
@@ -205,7 +227,7 @@ class RemoteClient:
             self._refresh_remote_token(force=True)
             logger.error("remote token was refused for an unknown command, it isn't sent again")
         elif command.retried:
-            self.commands.set_status(command, FAILED)
+            self.commands.set_status(command, FAILED, error="remote token refused again after a refresh")
             logger.error("%s refused again after a remote token refresh, giving up", name)
         else:
             self._refresh_remote_token(force=True)
@@ -213,63 +235,96 @@ class RemoteClient:
             logger.warning("%s is sent again, remote token was expired", name)
             self.commands.set_status(command, RETRIED, retried_as=retry.correlation_id)
             if not self.publish(retry):
-                self.commands.set_status(command, FAILED)
+                self.commands.set_status(command, FAILED, error="remote token refresh failed")
 
-    def _store_lock_state(self, data):
-        # doors_state can be absent or explicitly null depending on the event
-        locking_state = (data.get("doors_state") or {}).get("doors_locking_state")
-        if locking_state is None:
-            return
-        lock_state = self._decode_lock_state(locking_state)
-        if lock_state is None:
-            return
+    def _notify_command(self, command: RemoteCommand):
+        for callback in self.command_callbacks:
+            try:
+                callback(command)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("command callback:")
+
+    @contextmanager
+    def track_commands(self):
+        """Collect the correlation ids of the commands this thread publishes inside the with block."""
+        sent: List[str] = []
+        self._tracked.sent = sent
+        try:
+            yield sent
+        finally:
+            self._tracked.sent = None
+
+    def _get_vehicle_events(self, vin) -> VehicleEvents:
+        with self._vehicle_events_lock:
+            if vin not in self.vehicle_events:
+                self.vehicle_events[vin] = VehicleEvents(vin)
+            return self.vehicle_events[vin]
+
+    def _on_vehicle_event(self, data) -> bool:
+        """Take a vehicle event into account, False if it is older than one already received."""
         vin = data["vin"]
-        self.lock_state[vin] = lock_state
-        self.apply_lock_state(self.vehicles_list.get_car_by_vin(vin))
+        result = self._get_vehicle_events(vin).add(data)
+        if result == OUT_OF_ORDER:
+            return False
+        if result == CHANGED:
+            programs = (data.get("precond_state") or {}).get("programs")
+            if programs:
+                self._store_precond_programs(vin, programs)
+            self.apply_mqtt_state(self.vehicles_list.get_car_by_vin(vin))
+        return True
 
-    @staticmethod
-    def _decode_lock_state(locking_state):
-        lock_state = MQTT_DOORS_LOCKING_STATE.get(locking_state)
-        if lock_state is None:
-            logger.warning("unknown doors_locking_state %s, please report it on github", locking_state)
-        return lock_state
+    def apply_mqtt_state(self, car):
+        """Overwrite the parts of car.status which changed on mqtt after the api reported them.
 
-    def apply_lock_state(self, car):
-        """Overwrite car.status's doors lock state with the last one seen on mqtt.
-
-        mqtt pushes changes live; the rest api is polled every ~2 min and on some cars never
-        reports lockedState at all, so mqtt takes precedence whenever we have a value for it.
+        mqtt pushes changes live while the rest api is polled every ~2 min, and some cars never
+        report lockedState on the api at all. See mqtt_event for which values are used.
         """
-        if car is None or car.status is None:
+        if car is None or car.status is None or car.vin not in self.vehicle_events:
             return
-        lock_state = self.lock_state.get(car.vin)
-        if lock_state is None:
-            return
-        if car.status.doors_state is None:
-            car.status.doors_state = DoorsState()
-        car.status.doors_state.locked_state = [lock_state]
-        logger.debug("lock state of %s set from mqtt: %s", car.vin, lock_state)
+        self.vehicle_events[car.vin].apply(car.status)
 
-    def _fix_not_updated_api(self, charge_info, vin):
+    def _fix_not_updated_api(self, charge_info, vin, event_date=None):
         # Only a real charging rate counts: some cars (seen on an e-2008) keep reporting a stale
         # remaining_time while unplugged, so every answer to a wakeup triggered another wakeup.
-        if charge_info is not None and charge_info.get('rate', 0) != 0:
+        if charge_info is not None and charge_info.get('rate', 0) == 0:
+            with self._api_update_lock:
+                self._api_update_attempts.pop(vin, None)  # not charging: the next charge starts afresh
+        elif charge_info is not None:
             try:
                 car = self.vehicles_list.get_car_by_vin(vin=vin)
-                if car and car.status.get_energy('Electric').charging.status != INPROGRESS:
+                if car and rest_charging_status(car.status) != INPROGRESS:
+                    # events can arrive late or out of order: an event older than the api status
+                    # doesn't mean the api missed the charge, the car stopped charging since
+                    if self._is_older_than_status(event_date, car.status):
+                        logger.debug("ignore charging event of %s from %s, the api status is newer", vin, event_date)
+                        return
                     # fix a psa server bug where charge beginning without status api being properly updated.
                     # The delayed wakeup runs on a timer: sleeping here blocked the paho network thread
                     # for 60s, as long as the mqtt keepalive, so the broker dropped the connection (rc 16).
                     with self._api_update_lock:
                         if self._api_update_stopped or vin in self._api_update_timers:
                             return
-                        logger.warning("charge begin but API isn't updated")
-                        timer = threading.Timer(60, self._delayed_api_update, args=[vin])
+                        delay = self._api_update_delay(vin)
+                        logger.warning("charge begin but API isn't updated, wake up %s in %d s", vin, delay)
+                        timer = threading.Timer(delay, self._delayed_api_update, args=[vin])
                         timer.daemon = True
                         self._api_update_timers[vin] = timer
                         timer.start()
             except (IndexError, AttributeError):
                 logger.exception("on_mqtt_message:")
+
+    def _api_update_delay(self, vin):
+        attempts = self._api_update_attempts.get(vin, 0)
+        return min(API_UPDATE_DELAY * 2 ** min(attempts, 16), API_UPDATE_MAX_DELAY)
+
+    @staticmethod
+    def _is_older_than_status(event_date, status):
+        event_time = parse_event_date(event_date)
+        try:
+            status_time = status_updated_at(status)
+            return event_time is not None and status_time is not None and event_time < status_time
+        except TypeError:  # naive status date
+            return False
 
     def _delayed_api_update(self, vin):
         with self._api_update_lock:
@@ -277,8 +332,13 @@ class RemoteClient:
                 return
         try:
             car = self.vehicles_list.get_car_by_vin(vin=vin)
-            if car and car.status.get_energy('Electric').charging.status != INPROGRESS:
-                self.wakeup(vin)
+            if car and rest_charging_status(car.status) != INPROGRESS:
+                if self.wakeup(vin):
+                    with self._api_update_lock:
+                        self._api_update_attempts[vin] = self._api_update_attempts.get(vin, 0) + 1
+            else:
+                with self._api_update_lock:
+                    self._api_update_attempts.pop(vin, None)  # the api caught up
         except RateLimitException as e:
             # expected when the car is woken up too often, no need for a traceback
             logger.warning("Can't wake up %s: %s", vin, e)
@@ -296,7 +356,7 @@ class RemoteClient:
         with self._api_update_lock:
             self._api_update_stopped = False
         if self.load_otp():
-            self.mqtt_client = mqtt.Client(clean_session=True, protocol=mqtt.MQTTv311)
+            self.mqtt_client = MqttClient(clean_session=True, protocol=mqtt.MQTTv311)
             if environ.get("MQTT_LOG", "0") == "1":
                 self.mqtt_client.enable_logger(logger=logger)
             if self._refresh_remote_token():
@@ -363,6 +423,9 @@ class RemoteClient:
         logger.debug("mqtt publish: %s %s", mqtt_request.topic, message)
         # registered before publishing: the answer can arrive before publish() returns
         self.commands.add(mqtt_request)
+        tracked = getattr(self._tracked, "sent", None)
+        if tracked is not None:
+            tracked.append(mqtt_request.correlation_id)
         self.mqtt_client.publish(mqtt_request.topic, message)
         return True
 

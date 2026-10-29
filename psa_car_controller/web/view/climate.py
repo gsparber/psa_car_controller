@@ -11,7 +11,7 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.psa import precond_programs
 from psa_car_controller.web.view import status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    is_pending, is_preconditioning, read, remote_ready
+    command_supported, is_pending, is_preconditioning, not_in_subscription, read, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,8 @@ def _status(car, pending):
         html.Small(f"Last failure: {status_text.precond_failure_text(failure)}",
                    className="text-danger") if failure else None,
         action_button("precond", car.vin, label, color="secondary" if precond_on else "primary",
-                      className="w-100 mt-3 big-button", disabled=waiting or not remote_ready()),
+                      className="w-100 mt-3 big-button", disabled=waiting or not remote_ready())
+        if command_supported(car.vin, "/ThermalPrecond") else not_in_subscription(),
     ], className="card-block")
 
 

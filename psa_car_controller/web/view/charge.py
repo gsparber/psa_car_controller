@@ -10,7 +10,7 @@ from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    is_charging, is_pending, read, remote_ready
+    command_supported, is_charging, is_pending, not_in_subscription, read, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,8 @@ def _status(car, pending):
             html.Div([text, f" · {status_text.format_power(power)}" if power else None], className="charging-line"),
         ]),
         action_button("charge", car.vin, label, color="danger" if charging_now else "primary",
-                      className="w-100 mt-3 big-button", disabled=waiting or not remote_ready()),
+                      className="w-100 mt-3 big-button", disabled=waiting or not remote_ready())
+        if command_supported(car.vin, "/VehCharge") else not_in_subscription(),
     ], className="card-block")
 
 
