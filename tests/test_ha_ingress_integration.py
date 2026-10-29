@@ -159,6 +159,22 @@ class TestHomeAssistantIngressIntegration(TestCase):
         }
         self.validate_path(headers, r"/(assets|_dash|_favicon).+")
 
+    def test_referrer_policy_meta_before_scripts(self):
+        """
+        Home Assistant sends "Referrer-Policy: no-referrer", OpenStreetMap blocks tile requests without a Referer:
+        the page must set its own policy before any script loads the map.
+        """
+        headers = {
+            'X-Ingress-Path': '/api/ingress/a93a74ea_psacc/',
+            'Host': f'127.0.0.1:{self.server_port}'
+        }
+        response = requests.get(self.server_url, headers=headers, timeout=10)
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        meta = re.search(r'<meta name="referrer" content="strict-origin-when-cross-origin"\s*/?>', html)
+        self.assertIsNotNone(meta, "missing referrer meta tag")
+        self.assertLess(meta.start(), html.index("<script"))
+
     def test_api_route_with_ingress_path(self):
         """
         Test that Flask API routes (from api.py) work with prefix header.

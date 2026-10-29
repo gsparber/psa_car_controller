@@ -31,9 +31,11 @@ def get_manager() -> OpenIdCredentialManager:
     return manager
 
 
-def refresh(manager: OpenIdCredentialManager) -> bool:
+def refresh(manager: OpenIdCredentialManager, rejected_access_token=None) -> bool:
     # bypass the rate limit: it is shared by every manager of the test run
-    return OpenIdCredentialManager.refresh_token_now.__wrapped__(manager)
+    with patch.object(manager, "_refresh_with_retries",
+                      lambda: OpenIdCredentialManager._refresh_with_retries.__wrapped__(manager)):
+        return OpenIdCredentialManager.refresh_token_now(manager, rejected_access_token)
 
 
 def reject(manager: OpenIdCredentialManager, seconds_ago: float = 0):
@@ -124,7 +126,7 @@ class TestApiWithRejectedGrant(unittest.TestCase):
     def test_vehicle_info_needs_a_login_after_the_refresh_is_rejected(self):
         manager = get_manager()
         client = get_client(manager)
-        client.api_config.set_refresh_callback(lambda: refresh(manager))
+        client.api_config.set_refresh_callback(lambda token: refresh(manager, token))
         client.vehicles_list = MagicMock()
         unauthorized = ApiException(status=401, reason="Unauthorized")
         with patch.object(manager, "_refresh_token", side_effect=invalid_grant()), \

@@ -114,6 +114,13 @@ class TestLoadAppAgain(unittest.TestCase):
         self.clients[0].stop.assert_called_once()
         self.clients[1].stop.assert_not_called()
 
+    def test_refresh_argument_sets_the_rate_also_while_charging(self):
+        self.app.args.offline = False
+        self.app.args.refresh = 10
+        self.app.load_app()
+        self.assertEqual(600, self.clients[0].info_refresh_rate)
+        self.assertEqual(600, self.clients[0].charging_refresh_rate)
+
     def test_login_keeps_a_single_config_saving_loop(self):
         self.app.load_app()
         self.app.load_app()
@@ -138,6 +145,7 @@ class TestPSAClientStop(unittest.TestCase):
         client.vehicles_list = []
         client.info_callback = []
         client.remote_client = MagicMock()
+        client.manager = MagicMock()
         client.start_refresh_thread()
         timer = client.refresh_thread
         client.stop()
@@ -145,6 +153,7 @@ class TestPSAClientStop(unittest.TestCase):
         self.assertIs(timer, client.refresh_thread)
         self.assertFalse(timer.is_alive())
         client.remote_client.stop.assert_called_once()
+        client.manager.stop_scheduled_refresh.assert_called_once()
 
 
 if __name__ == '__main__':

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 import json
 import logging
+import re
 import traceback
 from os import path
 from typing import Optional
 
 import requests
 
-from psa_car_controller.psa.constants import BRAND
+from psa_car_controller.common.sensitive_filter import MASK, sensitive_filter
+from psa_car_controller.psa.constants import BRAND, MQTT_BRANDCODE
 from psa_car_controller.psa.setup.apk_parser import ApkParser
 from psa_car_controller.psa.setup.github import urlretrieve_from_github
 from psa_car_controller.psacc.application.car_controller import PSACarController
@@ -19,6 +21,40 @@ logger = logging.getLogger(__name__)
 GITHUB_USER = "flobz"
 GITHUB_REPO = "psa_apk"
 TIMEOUT_IN_S = 30
+CAR_ASSOCIATIONS_URL = "https://api.groupe-psa.com/applications/cvs/v4/mauv/car-associations"
+MAX_DESCRIPTION_LENGTH = 300
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def describe_response(data) -> str:
+    """Shape of a server answer without its values: they hold the email, ids and VINs of the user."""
+    if isinstance(data, dict):
+        keys = []
+        for key, value in data.items():
+            if isinstance(value, dict):
+                keys.append(f"{key}{{{', '.join(str(k) for k in value)}}}")
+            else:
+                keys.append(str(key))
+        text = "keys: " + ", ".join(keys)
+    elif isinstance(data, list):
+        text = f"list of {len(data)}"
+        if data:
+            text += ", first item " + describe_response(data[0])
+    else:
+        text = f"{type(data).__name__}: {_EMAIL_RE.sub(MASK, sensitive_filter.mask(str(data)))}"
+    if len(text) > MAX_DESCRIPTION_LENGTH:
+        text = text[:MAX_DESCRIPTION_LENGTH] + "..."
+    return text
+
+
+class MissingCustomerIdError(ValueError):
+    def __init__(self, car_associations):
+        details = "" if car_associations is None else f" (answer: {describe_response(car_associations)})"
+        super().__init__(
+            "Stellantis did not send the user id of your account and the customer id could not be read from "
+            f"the Stellantis API either{details}. If this account was configured before, restore the previous "
+            f"{DEFAULT_CONFIG_FILENAME} (it contains the customer_id) and log in again. "
+            "See https://github.com/flobz/psa_car_controller/issues/1279")
 
 
 def get_content_from_apk(filename: str, country_code: str) -> ApkParser:
@@ -54,7 +90,20 @@ class InitialSetup:
                            DEFAULT_CONFIG_FILENAME)
             self.customer_id = self.psacc.customer_id
             return
-        self.customer_id = BRAND[self.package_name]["brand_code"] + "-" + self.user_info["id"]
+        user_id = self.user_info.get("id")
+        if not isinstance(user_id, str) or not user_id:
+            # Stellantis stopped sending it for some accounts (#1279)
+            logger.warning("The account information of the brand has no user id (%s)",
+                           describe_response(self.user_info))
+            existing = self.__load_existing_config()
+            if existing is not None and existing.customer_id:
+                logger.warning("Reusing the customer id of %s", DEFAULT_CONFIG_FILENAME)
+                self.psacc = existing
+                self.customer_id = existing.customer_id
+                return
+            logger.warning("The customer id will be requested from the Stellantis API after the login")
+        else:
+            self.customer_id = BRAND[self.package_name]["brand_code"] + "-" + user_id
 
         self.psacc = PSAClient(None, self.client_id, self.client_secret,
                                None, self.customer_id, BRAND[self.package_name]["realm"],
@@ -131,6 +180,9 @@ class InitialSetup:
             )
 
             res_dict = res2.json()["success"]
+            if not isinstance(res_dict, dict):
+                raise TypeError(f"unexpected account information: {describe_response(res_dict)}")
+            logger.debug("Account information of the brand: %s", describe_response(res_dict))
         except Exception as ex:
             msg = traceback.format_exc()
             try:
@@ -168,8 +220,46 @@ class InitialSetup:
             logger.warning("Invalid charge control settings for %s will be reset: %s", vin, settings)
         return ChargeControl(self.psacc, vin, 100, [0, 0])
 
+    def __fetch_customer_id(self) -> str:
+        """Fallback when the account information has no user id: needs the OAuth token.
+
+        Same request as the Home Assistant integration, the answer is expected to be a list of
+        car associations with a "customer" field.
+        """
+        brand_code = BRAND[self.package_name]["brand_code"]
+        try:
+            res = self.psacc.manager.get(CAR_ASSOCIATIONS_URL,
+                                         params={"client_id": self.client_id,
+                                                 "locale": (self.culture or "").replace("_", "-")},
+                                         headers={"Accept": "application/hal+json",
+                                                  "User-Agent": "okhttp/4.8.0",
+                                                  "x-introspect-realm": BRAND[self.package_name]["realm"],
+                                                  "x-transaction-id": "1234"},
+                                         timeout=TIMEOUT_IN_S)
+            res.raise_for_status()
+            data = res.json()
+        except (requests.RequestException, ValueError) as ex:
+            logger.error("Can't get the car associations of the account: %s", ex)
+            raise MissingCustomerIdError(None) from ex
+        customer = None
+        if isinstance(data, list):
+            customer = next((association["customer"] for association in data
+                             if isinstance(association, dict) and isinstance(association.get("customer"), str)
+                             and association["customer"]), None)
+        if customer is None:
+            logger.error("No customer id in the car associations of the account: %s", describe_response(data))
+            raise MissingCustomerIdError(data)
+        if customer[:2] not in MQTT_BRANDCODE or customer[2:3] != "-":
+            customer = brand_code + "-" + customer
+        logger.info("Customer id read from the car associations of the account")
+        return customer
+
     def connect(self, code, config_prefix=""):
         self.psacc.connect(code)
+        if not self.psacc.customer_id:
+            self.customer_id = self.__fetch_customer_id()
+            self.psacc.customer_id = self.customer_id
+            self.psacc.account_info.customer_id = self.customer_id
         self.psacc.save_config(name=config_prefix + "config.json")
         res = self.psacc.get_vehicles()
 

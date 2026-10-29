@@ -6,6 +6,9 @@ from ..repository.car_model import CarModelRepository
 
 logger = logging.getLogger(__name__)
 
+# failed status requests in a row after which the kept status is reported as outdated
+EMPTY_STATUS_LIMIT = 3
+
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 class Car:
@@ -22,6 +25,7 @@ class Car:
         self.label = label
         self.brand = brand
         self._status = None
+        self._status_failures = 0
         self.abrp_name = abrp_name or model.abrp_name
         self.battery_power = battery_power or model.battery_power
         self.fuel_capacity = fuel_capacity or model.fuel_capacity
@@ -62,6 +66,7 @@ class Car:
     def to_dict(self):
         car_dict = copy(self.__dict__)
         car_dict.pop("_status")
+        car_dict.pop("_status_failures")
         return car_dict
 
     def __str__(self):
@@ -82,6 +87,22 @@ class Car:
         if self._status is not None and self.status.__class__ != CarStatus:
             self._status.__class__ = CarStatus
             self._status.correct(self.is_electric())
+
+    @property
+    def status_failures(self) -> int:
+        """Failed status requests in a row, the status is the last one received before them."""
+        return self._status_failures
+
+    @property
+    def status_outdated(self) -> bool:
+        return self._status_failures >= EMPTY_STATUS_LIMIT
+
+    def status_request_failed(self) -> int:
+        self._status_failures += 1
+        return self._status_failures
+
+    def status_request_succeeded(self):
+        self._status_failures = 0
 
     def get_charge_speed(self, diff_elvel, duration_in_sec) -> float:
         duration_in_hour = duration_in_sec / 3600

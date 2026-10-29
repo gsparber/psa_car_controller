@@ -97,7 +97,7 @@ class TestChargeControl(unittest.TestCase):
             def __init__(self):
                 self.vehicles_list = mock_vehicles_list
                 self.remote_client = mock_client
-                self.info_refresh_rate = 1
+                self.refresh_delay = 1
 
             def get_vehicle_info(self, vin):
                 return MockStatus()

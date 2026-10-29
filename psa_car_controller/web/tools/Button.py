@@ -3,6 +3,7 @@ from dash import html
 from dash._utils import create_callback_id
 from dash.dependencies import Output, Input
 
+from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.web.app import dash_app
 
 RESPONSE = "-response"
@@ -40,5 +41,8 @@ class Button:
                         html.Div(id=self.get_response_id())])
 
     def call(self, value):  # pylint: disable=unused-argument
-        self._fct(self._element_id)
+        try:
+            self._fct(self._element_id)
+        except RateLimitException:
+            return "Too many requests, try again later"
         return " "

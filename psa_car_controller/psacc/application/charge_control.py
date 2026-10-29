@@ -99,7 +99,7 @@ class ChargeControl:
                         self.control_charge_with_ack(False)
                     else:
                         next_in_second = (self._next_stop_hour - now).total_seconds()
-                        if next_in_second < self.psacc.info_refresh_rate:
+                        if next_in_second < self.psacc.refresh_delay:
                             periodicity = next_in_second
                             thread = threading.Timer(periodicity, self.process)
                             thread.daemon = True

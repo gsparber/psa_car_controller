@@ -10,14 +10,15 @@ from urllib3.exceptions import HTTPError
 
 from psa_car_controller.psa.connected_car_api.api.vehicles_api import VehiclesApi
 from psa_car_controller.psa.connected_car_api.rest import ApiException
-from psa_car_controller.psacc.model.car import Cars, Car
+from psa_car_controller.psacc.model.car import Cars, Car, EMPTY_STATUS_LIMIT
+from psa_car_controller.psacc.model.car_status import status_updated_at
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psa.AccountInformation import AccountInformation
 from psa_car_controller.psa.RemoteClient import RemoteClient
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.oauth import OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient
 from .ecomix import Ecomix
-from psa_car_controller.psa.constants import realm_info, AUTHORIZE_SERVICE
+from psa_car_controller.psa.constants import realm_info, AUTHORIZE_SERVICE, INPROGRESS
 
 from .abrp import Abrp
 from psa_car_controller.psacc.repository.db import Database
@@ -31,8 +32,38 @@ DEFAULT_CONFIG_FILENAME = "config.json"
 
 logger = CustomLogger.getLogger(__name__)
 
+# (HTTP status, API error code) of status requests that fail for a moment
+# 40400: no status found for the car, 50038: the API couldn't resolve the account's cars
+TRANSIENT_STATUS_ERRORS = {(404, "40400"), (500, "50038")}
+# the API can't reach the car's connection module, seen after it was replaced
+CONNECTION_MODULE_ERROR = (500, "50000")
+TOO_MANY_REQUESTS = 429
+
+# seconds between two status refreshes, PSA blocks accounts that poll too often
+DEFAULT_INFO_REFRESH_RATE = 300
+# while a car charges, charge control needs a fresh battery level to stop at the threshold
+CHARGING_REFRESH_RATE = 120
+# longest wait when PSA keeps answering that there were too many requests
+MAX_REFRESH_DELAY = 3600
+
+
+def api_error_code(ex: ApiException):
+    """Error code in the body of a failed API request: {"code": 40400, "message": ...}"""
+    try:
+        return str(json.loads(ex.body)["code"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
 
 class PSAClient:
+    info_refresh_rate = DEFAULT_INFO_REFRESH_RATE
+    charging_refresh_rate = CHARGING_REFRESH_RATE
+    # delay until the next refresh, as scheduled
+    refresh_delay = DEFAULT_INFO_REFRESH_RATE
+    _refresh_started = False
+    _rate_limited = False
+    _rate_limit_backoff = 0
+
     def connect(self, code: str):
         self.manager.connect_with_code(code)
 
@@ -50,7 +81,7 @@ class PSAClient:
         self.manager = OpenIdCredentialManager.create(self.service_information,
                                                       realm_info[self.realm]["scheme"], self.country_code)
         self.api_config = Oauth2PSACCApiConfig()
-        self.api_config.set_refresh_callback(self.manager.refresh_token_now)
+        self.api_config.set_refresh_callback(self._refresh_api_token)
         self.manager.refresh_token = refresh_token
         self.account_info = AccountInformation(client_id, customer_id, realm, country_code)
         self.remote_access_token = None
@@ -65,7 +96,6 @@ class PSAClient:
         self.weather_api = weather_api
         self.brand = brand
         self.info_callback = []
-        self.info_refresh_rate = 120
         if abrp is None:
             self.abrp = Abrp()
         else:
@@ -97,6 +127,13 @@ class PSAClient:
     def is_authenticated(self) -> bool:
         return bool(self.manager.access_token) and not self.manager.needs_login
 
+    def _refresh_api_token(self, rejected_access_token: str) -> bool:
+        """Refresh after a 401, and hand the new token to the request that is sent again."""
+        if not self.manager.refresh_token_now(rejected_access_token):
+            return False
+        self.api_config.access_token = self.manager.access_token
+        return True
+
     def api(self) -> VehiclesApi:
         if self.manager.rejected_grant_retry_due():
             try:
@@ -121,48 +158,131 @@ class PSAClient:
         self.manager.proxies = proxies
 
     def get_vehicle_info(self, vin, cache=False):
-        res = None
         car = self.vehicles_list.get_car_by_vin(vin)
         if cache and car.status is not None:
-            res = car.status
-        else:
-            for _ in range(0, 2):
-                try:
-                    res = self.api().get_vehicle_status(car.vehicle_id)
-                    if res is not None:
-                        car.status = res
-                        # a new status wipes anything mqtt filled in, so put it back
-                        self.remote_client.apply_lock_state(car)
-                        if self._record_enabled:
-                            self.record_info(car)
-                        return res
-                except (ApiException, HTTPError) as ex:
-                    logger.error("get_vehicle_info: ApiException: %s", ex, exc_info_debug=True)
-            car.status = res
-        return res
+            return car.status
+        for _ in range(0, 2):
+            try:
+                res = self.api().get_vehicle_status(car.vehicle_id)
+            except ApiException as ex:
+                if ex.status == TOO_MANY_REQUESTS:
+                    # asking again makes it worse, the refresh loop waits longer instead
+                    logger.warning("Too many requests to the API, can't get the status of %s", car.vin)
+                    self._rate_limited = True
+                    break
+                if self._log_status_error(car, ex):
+                    continue
+                break
+            except HTTPError as ex:
+                logger.error("get_vehicle_info: %s", ex, exc_info_debug=True)
+                continue
+            if res is not None:
+                if car.status_outdated:
+                    logger.info("Status of %s received again", car.vin)
+                car.status_request_succeeded()
+                self._set_status(car, res)
+                return car.status
+        # keep the last status: the API often fails for a moment, and an empty one breaks the UI and charge control
+        failures = car.status_request_failed()
+        if car.status is not None and failures == EMPTY_STATUS_LIMIT:
+            logger.error("No status of %s from the API for %d requests, the last one is outdated", car.vin, failures)
+        return car.status
+
+    @staticmethod
+    def _log_status_error(car: Car, ex: ApiException) -> bool:
+        """Log a failed status request, return whether asking again right away can help."""
+        error = (ex.status, api_error_code(ex))
+        if error in TRANSIENT_STATUS_ERRORS:
+            logger.warning("The API has no status of %s right now (HTTP %s, code %s), keeping the last one",
+                           car.vin, *error)
+            return False
+        if error == CONNECTION_MODULE_ERROR:
+            logger.error("The API can't reach the connection module of %s (HTTP 500, code 50000): it may have been "
+                         "replaced, remove the car from the brand app and add it again", car.vin)
+            return False
+        logger.error("get_vehicle_info: ApiException: %s", ex, exc_info_debug=True)
+        return True
+
+    def _set_status(self, car: Car, status):
+        old_date = status_updated_at(car.status) if car.status is not None else None
+        new_date = status_updated_at(status)
+        newer = True
+        if old_date is not None and new_date is not None:
+            try:
+                if new_date < old_date:
+                    # the API sometimes answers with an older cached status, it would undo the newer one
+                    logger.debug("Ignore status of %s from %s, older than the current one from %s",
+                                 car.vin, new_date, old_date)
+                    return
+                newer = new_date > old_date
+            except TypeError:  # naive and aware dates can't be compared
+                pass
+        car.status = status
+        # a new status wipes anything mqtt filled in, so put it back
+        self.remote_client.apply_lock_state(car)
+        # the same status again would only record the same data again
+        if self._record_enabled and newer:
+            self.record_info(car)
 
     def __refresh_vehicle_info(self):
-        if self.info_refresh_rate is not None:
-            if self.refresh_thread and self.refresh_thread.is_alive():
-                logger.debug("refresh_vehicle_info: precedent task still alive")
-                self.refresh_thread.cancel()
-            self.refresh_thread = threading.Timer(self.info_refresh_rate, self.__refresh_vehicle_info)
-            self.refresh_thread.daemon = True
-            self.refresh_thread.start()
-            try:
-                logger.debug("refresh_vehicle_info")
-                for car in self.vehicles_list:
-                    self.get_vehicle_info(car.vin)
-                for callback in self.info_callback:
-                    callback()
-            except AuthenticationRequiredException:
-                # already reported when the token was rejected, no traceback every refresh
-                logger.debug("refresh_vehicle_info: not connected")
-            except BaseException:
-                logger.exception("refresh_vehicle_info: ")
+        if self.info_refresh_rate is None:
+            return
+        logger.debug("refresh_vehicle_info")
+        try:
+            for car in self.vehicles_list:
+                self.get_vehicle_info(car.vin)
+        except RateLimitException as e:
+            logger.warning("refresh_vehicle_info: %s", e)
+            self._rate_limited = True
+        except AuthenticationRequiredException:
+            # already reported when the token was rejected, no traceback every refresh
+            logger.debug("refresh_vehicle_info: not connected")
+        except BaseException:
+            logger.exception("refresh_vehicle_info: ")
+        # scheduled once the status is known: the delay depends on it
+        self.__schedule_refresh()
+        try:
+            for callback in self.info_callback:
+                callback()
+        except AuthenticationRequiredException:
+            logger.debug("refresh_vehicle_info: not connected")
+        except BaseException:
+            logger.exception("refresh_vehicle_info: ")
+
+    def __schedule_refresh(self):
+        if self.info_refresh_rate is None:  # stopped meanwhile
+            return
+        if self.refresh_thread is not None and self.refresh_thread is not threading.current_thread():
+            logger.debug("refresh_vehicle_info: precedent task still alive")
+            self.refresh_thread.cancel()
+        self.refresh_delay = self._next_refresh_delay()
+        self.refresh_thread = threading.Timer(self.refresh_delay, self.__refresh_vehicle_info)
+        self.refresh_thread.daemon = True
+        self.refresh_thread.start()
+
+    def _next_refresh_delay(self) -> float:
+        if self._rate_limited:
+            self._rate_limited = False
+            self._rate_limit_backoff += 1
+            delay = max(min(self.info_refresh_rate * 2 ** self._rate_limit_backoff, MAX_REFRESH_DELAY),
+                        self.info_refresh_rate)
+            logger.warning("PSA rate limit reached, next status refresh in %d s", delay)
+            return delay
+        self._rate_limit_backoff = 0
+        if any(self._is_charging(car) for car in self.vehicles_list):
+            return min(self.info_refresh_rate, self.charging_refresh_rate)
+        return self.info_refresh_rate
+
+    @staticmethod
+    def _is_charging(car: Car) -> bool:
+        try:
+            return car.status.get_energy('Electric').charging.status == INPROGRESS
+        except AttributeError:  # no status yet, or a car without battery
+            return False
 
     def start_refresh_thread(self):
-        if self.refresh_thread is None:
+        if not self._refresh_started:
+            self._refresh_started = True
             self.__refresh_vehicle_info()
 
     def stop(self):
@@ -171,6 +291,7 @@ class PSAClient:
         self.info_refresh_rate = None
         if self.refresh_thread is not None:
             self.refresh_thread.cancel()
+        self.manager.stop_scheduled_refresh()
         self.remote_client.stop()
 
     def get_vehicles(self):

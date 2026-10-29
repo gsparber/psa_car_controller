@@ -1,6 +1,8 @@
 import json
 import logging
 import threading
+import time
+from collections import deque
 from datetime import datetime, timezone
 from os import environ
 from typing import Optional
@@ -17,6 +19,8 @@ from psa_car_controller.psa.constants import INPROGRESS, DEFAULT_PRECONDITIONING
 from psa_car_controller.psa import precond_programs
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.oauth import OpenIdCredentialManager
+from psa_car_controller.psa.remote_commands import RemoteCommands, RC_SUCCESS, RC_TOKEN_EXPIRED, \
+    REASON_NOT_COMPATIBLE, FAILED, RETRIED
 from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S
 from psa_car_controller.psa.otp.otp import ConfigException, save_otp, load_otp
 
@@ -41,6 +45,12 @@ MAX_REFRESH_DELAY = 120
 # so it must run well within that lifetime: 8h keeps the chain rotating forever and
 # survives one missed cycle.
 KEEPALIVE_PERIOD = 3600 * 8
+# a failed keepalive refresh is retried sooner, still well within the token lifetime
+KEEPALIVE_RETRY_PERIOD = 1800
+# Each wakeup powers the car's telematics unit from the 12V service battery: too many drain
+# it (keyless entry stops working). Same limit as the Home Assistant integration, per car.
+WAKEUP_LIMIT = 6
+WAKEUP_PERIOD = 60 * 20
 # the SMS endpoint regularly takes longer than the default timeout to answer
 SMS_TIMEOUT_IN_S = 20
 
@@ -58,6 +68,50 @@ class SmsRequestException(RemoteException):
         self.details = details
 
 
+class WakeupRateLimiter:
+    """At most `limit` wakeups per car within `period` seconds.
+
+    Shared by every RemoteClient (module level): a new login replaces the client, it must
+    not reset the budget of the cars.
+    """
+
+    def __init__(self, limit=WAKEUP_LIMIT, period=WAKEUP_PERIOD, clock=time.monotonic):
+        self.limit = limit
+        self.period = period
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._sent = {}
+
+    def acquire(self, vin):
+        """Reserve a wakeup for vin, returns its token for release(); raises RateLimitException."""
+        with self._lock:
+            now = self.clock()
+            sent = self._sent.setdefault(vin, deque())
+            while sent and now - sent[0] >= self.period:
+                sent.popleft()
+            if len(sent) >= self.limit:
+                retry_in = self.period - (now - sent[0])
+                raise RateLimitException(f"wakeup of {vin}: {self.limit} per {self.period // 60} min, "
+                                         f"retry in {retry_in:.0f}s")
+            sent.append(now)
+            return now
+
+    def release(self, vin, token):
+        """Give back a reservation whose wakeup never reached the car."""
+        with self._lock:
+            try:
+                self._sent.get(vin, deque()).remove(token)
+            except ValueError:
+                pass
+
+    def reset(self):
+        with self._lock:
+            self._sent.clear()
+
+
+wakeup_limiter = WakeupRateLimiter()
+
+
 class RemoteClient:
 
     def __init__(self, account_info: AccountInformation, vehicles_list: Cars, manager: OpenIdCredentialManager,
@@ -73,7 +127,8 @@ class RemoteClient:
             "accept": "application/hal+json",
             "User-Agent": "okhttp/4.8.0",
         }
-        self.last_request = None
+        # commands sent recently, by correlation_id: their answers are matched against them
+        self.commands = RemoteCommands()
         self.mqtt_client = None
         self.otp = None
         self._lock = threading.Lock()
@@ -121,17 +176,8 @@ class RemoteClient:
             if msg.topic.startswith(MQTT_RESP_TOPIC):
                 if "return_code" not in data:
                     logger.debug("mqtt msg hasn't return code")
-                elif data["return_code"] == "400":
-                    self._refresh_remote_token(force=True)
-                    if self.last_request:
-                        logger.warning("last request is send again, token was expired")
-                        last_request = self.last_request
-                        self.last_request = None
-                        self.publish(last_request, store=False)
-                    else:
-                        logger.error("Last request might have been send twice without success")
-                elif data["return_code"] != "0":
-                    logger.error('mqtt error %s : %s', data["return_code"], data.get("reason", "?"))
+                else:
+                    self._on_command_answer(data)
             elif msg.topic.startswith(MQTT_EVENT_TOPIC):
                 charge_info = data["charging_state"]
                 programs = data["precond_state"].get("programs", None)
@@ -141,6 +187,33 @@ class RemoteClient:
             self._fix_not_updated_api(charge_info, data["vin"])
         except KeyError:
             logger.exception("on_mqtt_message:")
+
+    def _on_command_answer(self, data):
+        return_code = str(data["return_code"])
+        reason = data.get("reason")
+        command = self.commands.answer(data.get("correlation_id"), return_code, reason)
+        name = command.name if command else "unknown command"
+        if return_code == RC_SUCCESS:
+            return
+        if return_code != RC_TOKEN_EXPIRED:
+            logger.error("mqtt error %s : %s (%s)", return_code, reason or "?", name)
+        elif reason == REASON_NOT_COMPATIBLE:
+            logger.error("%s isn't supported by this car: %s", name, reason)
+        elif command is None:
+            # sent by a previous client or too long ago: resending a random other command
+            # (what the old global last_request did) could be the wrong car
+            self._refresh_remote_token(force=True)
+            logger.error("remote token was refused for an unknown command, it isn't sent again")
+        elif command.retried:
+            self.commands.set_status(command, FAILED)
+            logger.error("%s refused again after a remote token refresh, giving up", name)
+        else:
+            self._refresh_remote_token(force=True)
+            retry = command.request.retry()
+            logger.warning("%s is sent again, remote token was expired", name)
+            self.commands.set_status(command, RETRIED, retried_as=retry.correlation_id)
+            if not self.publish(retry):
+                self.commands.set_status(command, FAILED)
 
     def _store_lock_state(self, data):
         # doors_state can be absent or explicitly null depending on the event
@@ -233,7 +306,7 @@ class RemoteClient:
                 self.mqtt_client.on_disconnect = self._on_mqtt_disconnect
                 self.mqtt_client.connect(MQTT_SERVER, 8885, 60)
                 self.mqtt_client.loop_start()
-                self.__keep_mqtt()
+                self.__schedule_keep_mqtt(KEEPALIVE_PERIOD)
                 return self.mqtt_client.is_connected()
         logger.error("Can't configure MQTT Client")
         return False
@@ -255,12 +328,24 @@ class RemoteClient:
             self.update_thread.join(timeout=TIMEOUT_IN_S)
 
     def __keep_mqtt(self):  # avoid token expiration
-        if len(self.vehicles_list) > 0:
-            try:
-                self.wakeup(self.vehicles_list[0].vin)
-            except Exception:
-                logger.exception("__keep_mqtt")
-        self.update_thread = threading.Timer(KEEPALIVE_PERIOD, self.__keep_mqtt)
+        # Only rotate the remote token: this used to wake the first car up every cycle, which
+        # drains its 12V battery for nothing (the refresh in publish() kept the token alive).
+        try:
+            refreshed = self._refresh_remote_token()
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("__keep_mqtt")
+            refreshed = False
+        if not refreshed:
+            logger.warning("keepalive: remote token refresh failed, retrying in %ds", KEEPALIVE_RETRY_PERIOD)
+        self.__schedule_keep_mqtt(KEEPALIVE_PERIOD if refreshed else KEEPALIVE_RETRY_PERIOD)
+
+    def __schedule_keep_mqtt(self, delay):
+        with self._api_update_lock:
+            if self._api_update_stopped:  # stop() ran during the refresh
+                return
+        if self.update_thread:
+            self.update_thread.cancel()
+        self.update_thread = threading.Timer(delay, self.__keep_mqtt)
         self.update_thread.daemon = True
         self.update_thread.start()
 
@@ -270,15 +355,15 @@ class RemoteClient:
         self.publish(msg)
         return msg
 
-    def publish(self, mqtt_request: MQTTRequest, store=True) -> bool:
+    def publish(self, mqtt_request: MQTTRequest) -> bool:
         if not self._refresh_remote_token():
             logger.error("Can't publish %s: remote token refresh failed", mqtt_request.topic)
             return False
         message = mqtt_request.get_message_to_json(self.remoteCredentials.access_token)
         logger.debug("mqtt publish: %s %s", mqtt_request.topic, message)
+        # registered before publishing: the answer can arrive before publish() returns
+        self.commands.add(mqtt_request)
         self.mqtt_client.publish(mqtt_request.topic, message)
-        if store:
-            self.last_request = mqtt_request
         return True
 
     def mqtt_request(self, vin, req_parameters, topic):
@@ -404,13 +489,20 @@ class RemoteClient:
         logger.info(msg)
         return self.publish(msg)
 
-    @rate_limit(6, 60 * 20)
     def wakeup(self, vin):
+        """Ask the car to send its state; raises RateLimitException past WAKEUP_LIMIT per WAKEUP_PERIOD."""
+        token = wakeup_limiter.acquire(vin)
         logger.info("ask wakeup to %s", vin)
         msg = self.mqtt_request(vin, {"action": "state"}, "/VehCharge/state")
         logger.info(msg)
-        self.publish(msg)
-        return True
+        published = False
+        try:
+            published = self.publish(msg)
+        finally:
+            if not published:
+                # the car wasn't woken up: don't count it
+                wakeup_limiter.release(vin, token)
+        return published
 
     def lock_door(self, vin, lock: bool):
         if lock:

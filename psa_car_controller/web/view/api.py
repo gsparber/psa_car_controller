@@ -93,6 +93,10 @@ def get_vehicle_info(vin):
         status=200,
         mimetype='application/json'
     )
+    car = APP.myp.vehicles_list.get_car_by_vin(vin)
+    if car is not None and car.status_outdated:
+        # the API failed for a while, this is the last status it returned
+        response.headers["X-Status-Outdated"] = str(car.status_failures)
     return response
 
 

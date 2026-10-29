@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from psa_car_controller.psa.connected_car_api import Battery
 from psa_car_controller.psa.connected_car_api.models.energy import Energy
@@ -13,13 +14,13 @@ from psa_car_controller.psa.connected_car_api.models.vehicle_odometer import Veh
 logger = logging.getLogger(__name__)
 
 
-# pylint: disable=too-many-arguments,too-many-positional-arguments
+# pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
 class CarStatus(Status):
     def __init__(self, embedded=None, links=None, battery=None, doors_state=None, energy=None, environment=None,
                  ignition=None, kinetic=None, last_position=None, preconditionning=None, privacy=None, safety=None,
-                 service=None, timed_odometer=None):  # noqa: E501
+                 service=None, timed_odometer=None, updated_at=None):  # noqa: E501
         super().__init__(embedded, links, battery, doors_state, energy, environment, ignition, kinetic, last_position,
-                         preconditionning, privacy, safety, service, timed_odometer)
+                         preconditionning, privacy, safety, service, timed_odometer, updated_at)
         self.correct(False)
 
     def correct(self, electric_car):
@@ -45,6 +46,9 @@ class CarStatus(Status):
         if self.battery is None:
             self.battery = Battery()
 
+    def get_updated_at(self):
+        return status_updated_at(self)
+
     def is_moving(self):
         try:
             return self.kinetic.moving
@@ -57,3 +61,18 @@ class CarStatus(Status):
             if energy.type == energy_type:
                 return energy
         return Energy(charging=EnergyCharging())
+
+
+def status_updated_at(status: Status):
+    """Date of a status from the API: its updatedAt, else the newest date of its parts."""
+    updated_at = getattr(status, "_updated_at", None)
+    if isinstance(updated_at, datetime):
+        return updated_at
+    dates = [energy.updated_at for energy in status.energy or []]
+    dates.append(getattr(getattr(status.last_position, "properties", None), "updated_at", None))
+    dates.append(getattr(status.timed_odometer, "updated_at", None))
+    dates = [date for date in dates if isinstance(date, datetime)]
+    try:
+        return max(dates, default=None)
+    except TypeError:  # naive and aware dates can't be compared
+        return None

@@ -114,7 +114,8 @@ class PSACarController(metaclass=Singleton):
             self.is_good = True
         else:
             if self.args.refresh:
-                self.myp.info_refresh_rate = self.args.refresh * 60
+                # the chosen rate also applies while charging
+                self.myp.info_refresh_rate = self.myp.charging_refresh_rate = self.args.refresh * 60
             self.is_good = self.myp.manager.refresh_token_now()
             if self.is_good:
                 self.__start_services()
@@ -135,6 +136,7 @@ class PSACarController(metaclass=Singleton):
         return True
 
     def __start_services(self):
+        self.myp.manager.start_scheduled_refresh()
         logger.info(str(self.myp.get_vehicles()))
         if self.args.refresh:
             self.myp.start_refresh_thread()

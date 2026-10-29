@@ -44,7 +44,8 @@ class Status(object):
         'privacy': 'Privacy',
         'safety': 'Safety',
         'service': 'ServiceType',
-        'timed_odometer': 'VehicleOdometer'
+        'timed_odometer': 'VehicleOdometer',
+        'updated_at': 'datetime'
     }
 
     attribute_map = {
@@ -61,10 +62,11 @@ class Status(object):
         'privacy': 'privacy',
         'safety': 'safety',
         'service': 'service',
-        'timed_odometer': 'odometer'
+        'timed_odometer': 'odometer',
+        'updated_at': 'updatedAt'
     }
 
-    def __init__(self, embedded=None, links=None, battery=None, doors_state=None, energy=None, environment=None, ignition=None, kinetic=None, last_position=None, preconditionning=None, privacy=None, safety=None, service=None, timed_odometer=None):  # noqa: E501
+    def __init__(self, embedded=None, links=None, battery=None, doors_state=None, energy=None, environment=None, ignition=None, kinetic=None, last_position=None, preconditionning=None, privacy=None, safety=None, service=None, timed_odometer=None, updated_at=None):  # noqa: E501
         """Status - a model defined in Swagger"""  # noqa: E501
 
         self._embedded = None
@@ -81,6 +83,7 @@ class Status(object):
         self._safety = None
         self._service = None
         self._timed_odometer = None
+        self._updated_at = None
         self.discriminator = None
 
         if embedded is not None:
@@ -110,6 +113,8 @@ class Status(object):
             self.service = service
         if timed_odometer is not None:
             self.timed_odometer = timed_odometer
+        if updated_at is not None:
+            self.updated_at = updated_at
 
     @property
     def embedded(self):
@@ -408,6 +413,27 @@ class Status(object):
         """
 
         self._timed_odometer = timed_odometer
+
+    @property
+    def updated_at(self):
+        """Gets the updated_at of this Status.  # noqa: E501
+
+
+        :return: The updated_at of this Status.  # noqa: E501
+        :rtype: datetime
+        """
+        return self._updated_at
+
+    @updated_at.setter
+    def updated_at(self, updated_at):
+        """Sets the updated_at of this Status.
+
+
+        :param updated_at: The updated_at of this Status.  # noqa: E501
+        :type: datetime
+        """
+
+        self._updated_at = updated_at
 
     def to_dict(self):
         """Returns the model properties as a dict"""

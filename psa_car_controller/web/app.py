@@ -35,6 +35,10 @@ META_TAGS = [
     {"name": "apple-mobile-web-app-capable", "content": "yes"},
     {"name": "apple-mobile-web-app-status-bar-style", "content": "default"},
     {"name": "apple-mobile-web-app-title", "content": "PSACC"},
+    # Home Assistant answers every request, ingress included, with "Referrer-Policy: no-referrer". The OpenStreetMap
+    # tile servers block browser requests without a Referer (403 "Access blocked"), so the map stays empty.
+    # A meta referrer overrides the header for this page: tile requests then send the origin, never the path.
+    {"name": "referrer", "content": "strict-origin-when-cross-origin"},
 ]
 
 # Follow the system light/dark setting, also when it changes while the app is open. Inline in <head> so the page

@@ -10,13 +10,21 @@ MQTT_REQ_TOPIC = "psa/RemoteServices/from/cid/"
 class MQTTRequest:
     TIME_BEFORE_EXPIRATION = 30
 
-    def __init__(self, topic, vin, req_parameters, customer_id):
+    def __init__(self, topic, vin, req_parameters, customer_id, retried=False):
         self.customer_id = customer_id
+        self.name = topic
         self.topic = MQTT_REQ_TOPIC + self.customer_id + topic
         self.vin = vin
         self.req_parameters = req_parameters
         self.date = datetime.now()
         self.data = {}
+        # the answer carries this id: it tells which command it belongs to
+        self.correlation_id = self.__gen_correlation_id(datetime.utcnow())
+        self.retried = retried
+
+    def retry(self):
+        """The same command with a new correlation_id, to resend it once."""
+        return MQTTRequest(self.name, self.vin, self.req_parameters, self.customer_id, retried=True)
 
     def get_message_to_json(self, remote_access_token):
         return json.dumps(self.get_message(remote_access_token))
@@ -25,7 +33,7 @@ class MQTTRequest:
         date = datetime.utcnow()
         date_str = date.strftime(PSA_DATE_FORMAT)
         self.data = {"access_token": remote_access_token, "customer_id": self.customer_id,
-                     "correlation_id": self.__gen_correlation_id(date), "req_date": date_str, "vin": self.vin,
+                     "correlation_id": self.correlation_id, "req_date": date_str, "vin": self.vin,
                      "req_parameters": self.req_parameters}
         return self.data
 

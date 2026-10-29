@@ -41,6 +41,10 @@ Data are fetched in the following scenarios:
 - refresh is enabled with "-R"
 - You use "get_vehicleinfo" API endpoint
 
+With charge control and without "-R", the status is fetched every 5 minutes, and every 2 minutes while a car is charging.
+"-R x" fetches it every x minutes in both cases. When PSA answers that there were too many requests,
+the next fetch waits twice as long each time, up to one hour. Fetching more often can get the account blocked.
+
 
 You need to make few trips to be able to see stats in the dashboard.
 

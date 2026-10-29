@@ -8,7 +8,7 @@ from psa_car_controller.psa.otp.otp import ActivationException, FAQ_ACTIVATION_U
 from psa_car_controller.psa.RemoteClient import SmsRequestException
 from psa_car_controller.psa.setup.headless_oauth import HeadlessOAuthError, get_oauth_code_headless
 from psa_car_controller.psacc.application.car_controller import PSACarController
-from psa_car_controller.psa.setup.app_decoder import InitialSetup
+from psa_car_controller.psa.setup.app_decoder import InitialSetup, MissingCustomerIdError
 from psa_car_controller.common.mylogger import LOG_FILE
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.tools.utils import create_error_alert
@@ -137,6 +137,9 @@ def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: dis
             return dbc.Alert(["Login successful! ",
                               html.A("Continue with remote control setup",
                                      href=dash_app.get_relative_path("/config"))], color="success")
+        except MissingCustomerIdError as e:
+            # the login worked, logging in again by hand would fail the same way
+            return dbc.Alert(str(e), color="danger")
         except HeadlessOAuthError as e:
             redirect_uri = parse.quote(auth_url)
             debug_style = {"height": "150px", "font-family": "monospace", "font-size": "12px",
