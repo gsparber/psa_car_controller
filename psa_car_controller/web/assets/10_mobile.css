@@ -576,6 +576,7 @@ body {
 
 /* Settings: connection state badges */
 .status-ok,
+.status-warn,
 .status-error {
   font-size: 0.9rem;
   font-weight: 500;
@@ -584,6 +585,10 @@ body {
 
 .status-ok {
   color: var(--bs-success-text-emphasis);
+}
+
+.status-warn {
+  color: var(--bs-warning-text-emphasis);
 }
 
 .status-error {

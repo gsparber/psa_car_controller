@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 from unittest import mock
 
-from psa_car_controller.psa.RemoteClient import KEEPALIVE_PERIOD, MAX_REFRESH_DELAY, RemoteClient
+from psa_car_controller.common.utils import RateLimitException
+from psa_car_controller.psa.RemoteClient import KEEPALIVE_PERIOD, MAX_REFRESH_DELAY, TOKEN_RATE_LIMITED, RemoteClient
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.otp.otp import ConfigException
 
@@ -75,6 +76,25 @@ class TestRefreshRemoteToken(unittest.TestCase):
         # THEN no refresh is performed
         self.assertTrue(refreshed)
         remote_client.manager.refresh_token_now.assert_not_called()
+
+    def test_refresh_failure_is_recorded_until_next_success(self):
+        # GIVEN a remote client whose account token refresh is rate limited
+        remote_client = get_remote_client()
+        remote_client.manager.refresh_token_now.side_effect = RateLimitException("refresh_token_now")
+
+        # WHEN the token is refreshed
+        refreshed = remote_client._refresh_remote_token(force=True)
+
+        # THEN the failure is kept so the settings page can show it, though mqtt may still be connected
+        self.assertFalse(refreshed)
+        self.assertEqual(TOKEN_RATE_LIMITED, remote_client.token_error)
+
+        # WHEN a later refresh succeeds
+        remote_client.manager.refresh_token_now.side_effect = None
+        self.assertTrue(remote_client._refresh_remote_token(force=True))
+
+        # THEN the error is cleared
+        self.assertIsNone(remote_client.token_error)
 
     def test_keepalive_period_is_well_under_token_lifetime(self):
         # Regression test for Sentry issue 150805222 / the daily invalid_grant: the remote

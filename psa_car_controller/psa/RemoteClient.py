@@ -41,6 +41,8 @@ MAX_REFRESH_DELAY = 120
 # so it must run well within that lifetime: 8h keeps the chain rotating forever and
 # survives one missed cycle.
 KEEPALIVE_PERIOD = 3600 * 8
+# RemoteClient.token_error values
+TOKEN_RATE_LIMITED, TOKEN_ACCOUNT_FAILED, TOKEN_REMOTE_FAILED = "rate_limited", "account_failed", "remote_failed"
 
 
 class RemoteException(Exception):
@@ -68,6 +70,10 @@ class RemoteClient:
         self._lock = threading.Lock()
         self.update_thread: threading.Timer = None
         self.remote_token_last_update: Optional[datetime] = None
+        # why the last remote token refresh failed, None once it succeeds: the mqtt socket can stay
+        # connected while every publish fails on the token, so is_connected() alone isn't a health check
+        # (TOKEN_RATE_LIMITED is temporary and heals itself, the others need the user)
+        self.token_error: Optional[str] = None
 
     def __on_mqtt_connect(self, client, userdata, result_code, _):  # pylint: disable=unused-argument
         logger.info("Connected with result code %s", result_code)
@@ -243,6 +249,7 @@ class RemoteClient:
             try:
                 if not self.manager.refresh_token_now():
                     logger.error("Can't refresh remote token: access token refresh failed")
+                    self.token_error = TOKEN_ACCOUNT_FAILED
                     return False
                 if bad_remote_token:
                     logger.warning("remote_refresh_token isn't defined")
@@ -266,12 +273,15 @@ class RemoteClient:
                     self._get_remote_access_token(otp_code)
                 self.remote_token_last_update = datetime.now()
                 self.mqtt_client.username_pw_set("IMA_OAUTH_ACCESS_TOKEN", self.remoteCredentials.access_token)
+                self.token_error = None
                 return True
             except RateLimitException as e:
                 logger.error("Can't refresh remote token please wait... %s", e)
+                self.token_error = TOKEN_RATE_LIMITED
                 return False
             except (RequestException, KeyError, AttributeError, RemoteException, ConfigException):
                 logger.exception("Can't refresh remote token, please redo otp procedure")
+                self.token_error = TOKEN_REMOTE_FAILED
                 return False
 
     def get_sms_otp_code(self):

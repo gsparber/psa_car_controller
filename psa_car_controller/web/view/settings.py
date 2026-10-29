@@ -10,6 +10,7 @@ from dash.exceptions import PreventUpdate
 from psa_car_controller import __version__
 from psa_car_controller.psa.constants import BRAND, realm_info
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME
+from psa_car_controller.psa.RemoteClient import TOKEN_ACCOUNT_FAILED, TOKEN_RATE_LIMITED, TOKEN_REMOTE_FAILED
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import ui
 from psa_car_controller.web.view.car_access import app, read
@@ -25,7 +26,13 @@ RECONNECT = "settings-reconnect"
 # account states
 NO_ACCOUNT, LOGIN_FAILED, LOGGED_IN = "none", "failed", "ok"
 # remote control states
-REMOTE_OFF, REMOTE_SETUP, REMOTE_ERROR, REMOTE_OK = "off", "setup", "error", "ok"
+REMOTE_OFF, REMOTE_SETUP, REMOTE_PAUSED, REMOTE_ERROR, REMOTE_OK = "off", "setup", "paused", "error", "ok"
+
+TOKEN_ERROR_TEXT = {
+    TOKEN_ACCOUNT_FAILED: "The account token can't be refreshed, so commands don't reach the car.",
+    TOKEN_REMOTE_FAILED: "The remote token can't be refreshed, the OTP has probably expired: "
+                         "request a new SMS code below.",
+}
 
 
 def _myp():
@@ -44,19 +51,29 @@ def remote_state():
     remote = read(lambda: _myp().remote_client)
     if remote is None or (remote.otp is None and not path.isfile(OTP_CONFIG_NAME)):
         return REMOTE_SETUP
-    if read(lambda: remote.mqtt_client.is_connected(), False):
+    if remote.token_error == TOKEN_RATE_LIMITED:
+        return REMOTE_PAUSED
+    if read(lambda: remote.mqtt_client.is_connected(), False) and remote.token_error is None:
         return REMOTE_OK
     return REMOTE_ERROR
 
 
 def current_state():
     account = account_state()
-    return [account, remote_state() if account == LOGGED_IN else None]
+    if account != LOGGED_IN:
+        return [account, None, None]
+    remote = remote_state()
+    error = read(lambda: _myp().remote_client.token_error) if remote == REMOTE_ERROR else None
+    return [account, remote, error]
+
+
+STATUS_ICON = {"ok": "bi-check-circle-fill", "warn": "bi-pause-circle-fill", "error": "bi-exclamation-circle-fill"}
 
 
 def _status_row(icon, label, value, ok):
-    badge = html.Span([html.I(className="bi bi-check-circle-fill me-1" if ok else "bi bi-exclamation-circle-fill me-1"),
-                       value], className="status-ok" if ok else "status-error")
+    """ok: True (green), False (red) or "warn" (orange, a temporary problem that heals itself)."""
+    level = "warn" if ok == "warn" else "ok" if ok else "error"
+    badge = html.Span([html.I(className=f"bi {STATUS_ICON[level]} me-1"), value], className=f"status-{level}")
     return html.Div([html.I(className=f"bi {icon} me-3"), html.Span(label, className="flex-grow-1"), badge],
                     className="list-group-item d-flex align-items-center")
 
@@ -83,7 +100,7 @@ def _account(state):
             html.Div(login_form(_brand(), country=country), className="card-block")]
 
 
-def _remote(state):
+def _remote(state, error=None):
     if state == REMOTE_OFF:
         return [html.Div(html.Div([html.I(className="bi bi-broadcast me-3"),
                                    html.Span("Remote control", className="flex-grow-1"),
@@ -92,24 +109,30 @@ def _remote(state):
                 html.Small("Started with --remote-disable or --offline.", className="text-body-secondary")]
     if state == REMOTE_OK:
         return [html.Div(_status_row("bi-broadcast", "Remote control", "Connected", True), className="list-group")]
+    if state == REMOTE_PAUSED:
+        # no Reconnect nor OTP form: both would only refresh again and extend the rate limit
+        return [html.Div(_status_row("bi-broadcast", "Remote control", "Paused", "warn"), className="list-group mb-3"),
+                dbc.Alert("Too many token refreshes in a short time. Commands are paused and it retries on its own "
+                          "within 30 min.", color="warning")]
     if state == REMOTE_SETUP:
         intro = html.P("To start charging or the climate from here, activate remote control with a code sent by "
                        "SMS and your app PIN.", className="text-body-secondary")
         return [intro, html.Div(otp_form(), className="card-block")]
     return [html.Div(_status_row("bi-broadcast", "Remote control", "Not connected", False),
                      className="list-group mb-3"),
-            dbc.Alert(["Can't reach the PSA remote server. If reconnecting doesn't help, the OTP has probably "
-                       "expired: request a new SMS code below."], color="danger"),
+            dbc.Alert(TOKEN_ERROR_TEXT.get(error, "Can't reach the PSA remote server. If reconnecting doesn't help, "
+                                                  "the OTP has probably expired: request a new SMS code below."),
+                      color="danger"),
             dbc.Button([html.I(className="bi bi-arrow-repeat me-2"), "Reconnect"], id=RECONNECT, n_clicks=0,
                        color="secondary", className="w-100 big-button mb-3"),
             html.Div(otp_form(), className="card-block")]
 
 
 def render(state):
-    account, remote = state
+    account, remote, error = state
     sections = [ui.section("Account", _account(account))]
     if remote is not None:
-        sections.append(ui.section("Remote control", _remote(remote)))
+        sections.append(ui.section("Remote control", _remote(remote, error)))
     return sections
 
 

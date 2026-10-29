@@ -142,3 +142,28 @@ class TestLegacyPagePath(unittest.TestCase):
         self.assertEqual("/_dash-layout", legacy_page_path("/v1/_dash-layout"))
         self.assertEqual("/assets/pwa.js", legacy_page_path("/v1/assets/pwa.js"))
         self.assertEqual("/charge", legacy_page_path("/charge"))
+
+
+class TestSettingsRemoteState(unittest.TestCase):
+    def remote_state(self, token_error, connected=True):
+        from psa_car_controller.web.view import settings  # pylint: disable=import-outside-toplevel
+        controller = MagicMock(remote_control=True)
+        controller.myp.remote_client.token_error = token_error
+        controller.myp.remote_client.mqtt_client.is_connected.return_value = connected
+        with patch.object(settings, "app", return_value=controller):
+            return settings.remote_state()
+
+    def test_connected(self):
+        from psa_car_controller.web.view.settings import REMOTE_OK  # pylint: disable=import-outside-toplevel
+        self.assertEqual(REMOTE_OK, self.remote_state(None))
+
+    def test_connected_socket_but_token_failed(self):
+        # the mqtt socket stays open while every publish fails on the token
+        from psa_car_controller.psa.RemoteClient import TOKEN_REMOTE_FAILED  # pylint: disable=import-outside-toplevel
+        from psa_car_controller.web.view.settings import REMOTE_ERROR  # pylint: disable=import-outside-toplevel
+        self.assertEqual(REMOTE_ERROR, self.remote_state(TOKEN_REMOTE_FAILED))
+
+    def test_rate_limited_is_paused(self):
+        from psa_car_controller.psa.RemoteClient import TOKEN_RATE_LIMITED  # pylint: disable=import-outside-toplevel
+        from psa_car_controller.web.view.settings import REMOTE_PAUSED  # pylint: disable=import-outside-toplevel
+        self.assertEqual(REMOTE_PAUSED, self.remote_state(TOKEN_RATE_LIMITED))
