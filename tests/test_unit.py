@@ -84,6 +84,18 @@ class TestUnit(unittest.TestCase):
         assert CarModelRepository().find_model_by_vin("VXKUHZKXZL").name == "corsa-e"
         assert CarModelRepository().find_model_by_vin("VXKUKZKW0S").name == "Mokka-e 2024+"
 
+    def test_car_model_e_c3_2026(self):
+        model = CarModelRepository().find_model_by_vin("VR7CBZYA4T1234567")
+        assert model.name == "Citroën e-C3 IV"
+        assert model.battery_power == 44
+        assert model.abrp_name == "citroen:ec3:24:44"
+
+    def test_car_model_e_3008_gt_2026(self):
+        model = CarModelRepository().find_model_by_vin("VR3KCZKZXT1234567")
+        assert model.name == "E-3008 GT"
+        assert model.battery_power == 73
+        assert CarModelRepository().find_model_by_name("E-3008 GT").reg == "VR3KCZKZXT"
+
     def test_c02_signal_cache(self):
         start = datetime.utcnow().replace(tzinfo=UTC) - timedelta(minutes=30)
         end = datetime.utcnow().replace(tzinfo=UTC)
@@ -210,6 +222,7 @@ class TestUnit(unittest.TestCase):
         res = trip.get_info()
         assert compare_dict(res, {'consumption_km': 24.21052631578947,
                                   'start_at': date0,
+                                  'end_at': date2,
                                   'consumption_by_temp': None,
                                   'positions': {'lat': [latitude], 'long': [longitude]},
                                   'duration': 40.0, 'speed_average': 28.5, 'distance': 19.0, 'mileage': 30.0,
@@ -274,6 +287,7 @@ class TestUnit(unittest.TestCase):
         res = trips[car.vin].get_trips_as_dict()
         assert compare_dict(res, [{'consumption_km': 6.947368421052632,
                                    'start_at': date0,
+                                   'end_at': date2,
                                    'consumption_by_temp': None,
                                    'positions': {'lat': [latitude],
                                                  'long': [longitude]},
@@ -302,6 +316,7 @@ class TestUnit(unittest.TestCase):
         res = trips[car.vin].get_trips_as_dict()
         assert compare_dict(res, [{'consumption_km': 6.947368421052632,
                                    'start_at': start,
+                                   'end_at': end,
                                    'consumption_by_temp': None,
                                    'positions': {'lat': [latitude],
                                                  'long': [longitude]},

@@ -49,6 +49,8 @@ DEFAULT_INFO_REFRESH_RATE = 300
 CHARGING_REFRESH_RATE = 120
 # longest wait when PSA keeps answering that there were too many requests
 MAX_REFRESH_DELAY = 3600
+# seconds between the status requests of two cars of the account, not all at once
+CAR_STAGGER_DELAY = 15
 
 
 def api_error_code(ex: ApiException):
@@ -67,6 +69,9 @@ class PSAClient:
     _refresh_started = False
     _rate_limited = False
     _rate_limit_backoff = 0
+    _stop_event: threading.Event = None
+    # seconds waited between the cars during the current refresh
+    _staggered = 0
     command_refresh: CommandStatusRefresh = None
     vehicle_services: VehicleServices = None
 
@@ -110,6 +115,7 @@ class PSAClient:
         self.config_file = DEFAULT_CONFIG_FILENAME
         Ecomix.co2_signal_key = co2_signal_api
         self.refresh_thread: threading.Timer = None
+        self._stop_event = threading.Event()
         remote_credentials = RemoteCredentials(remote_refresh_token)
         remote_credentials.update_callbacks.append(self.save_config)
         self.remote_client = RemoteClient(self.account_info,
@@ -267,9 +273,14 @@ class PSAClient:
         if self.info_refresh_rate is None:
             return
         logger.debug("refresh_vehicle_info")
+        self._staggered = 0
         try:
-            for car in self.vehicles_list:
+            for index, car in enumerate(self.vehicles_list):
+                if index > 0 and not self._wait_before_next_car():
+                    return  # stopped meanwhile
                 self.get_vehicle_info(car.vin)
+                if self._rate_limited:  # the next car would be refused too
+                    break
         except RateLimitException as e:
             logger.warning("refresh_vehicle_info: %s", e)
             self._rate_limited = True
@@ -288,6 +299,21 @@ class PSAClient:
             logger.debug("refresh_vehicle_info: not connected")
         except BaseException:
             logger.exception("refresh_vehicle_info: ")
+
+    def _car_stagger_delay(self) -> float:
+        """Wait between two cars, short enough for every car to be asked before the next refresh."""
+        shortest_rate = min(self.info_refresh_rate, self.charging_refresh_rate)
+        return min(CAR_STAGGER_DELAY, shortest_rate / len(self.vehicles_list))
+
+    def _wait_before_next_car(self) -> bool:
+        """Return False when the client was stopped during the wait."""
+        if self._stop_event is None:
+            self._stop_event = threading.Event()
+        delay = self._car_stagger_delay()
+        if self._stop_event.wait(delay) or self.info_refresh_rate is None:
+            return False
+        self._staggered += delay
+        return True
 
     def _refresh_vehicle_services(self):
         """Maintenance and rights, they are only asked for once a day: no extra request at each refresh."""
@@ -320,7 +346,8 @@ class PSAClient:
         if self.refresh_thread is not None and self.refresh_thread is not threading.current_thread():
             logger.debug("refresh_vehicle_info: precedent task still alive")
             self.refresh_thread.cancel()
-        self.refresh_delay = self._next_refresh_delay()
+        # the wait between the cars is part of the delay: each car is still asked once per delay
+        self.refresh_delay = max(self._next_refresh_delay() - self._staggered, 0)
         self.refresh_thread = threading.Timer(self.refresh_delay, self.__refresh_vehicle_info)
         self.refresh_thread.daemon = True
         self.refresh_thread.start()
@@ -348,12 +375,19 @@ class PSAClient:
     def start_refresh_thread(self):
         if not self._refresh_started:
             self._refresh_started = True
-            self.__refresh_vehicle_info()
+            if len(self.vehicles_list) > 1:
+                # the wait between the cars mustn't hold up the start
+                thread = threading.Thread(target=self.__refresh_vehicle_info, daemon=True)
+                thread.start()
+            else:
+                self.__refresh_vehicle_info()
 
     def stop(self):
         """Stop polling PSA and the remote control, for a client that is being replaced."""
         # no refresh rate: a refresh running right now doesn't schedule the next one either
         self.info_refresh_rate = None
+        if self._stop_event is not None:  # ends the wait between two cars
+            self._stop_event.set()
         if self.refresh_thread is not None:
             self.refresh_thread.cancel()
         self.manager.stop_scheduled_refresh()

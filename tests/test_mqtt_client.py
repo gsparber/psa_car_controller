@@ -122,6 +122,9 @@ class TestMqttClientConnection(unittest.TestCase):
         sock = self.connect([ADDRESS_1])
         self.assertEqual(("10.0.0.5", 0), sock.bound_to)
 
+    def test_uses_paho_2_callbacks(self):
+        self.assertEqual(mqtt.CallbackAPIVersion.VERSION2, self.client._callback_api_version)
+
     def test_proxy_uses_paho_connection(self):
         with patch.object(self.client, "_get_proxy", return_value={"proxy_type": 2, "proxy_addr": "proxy"}), \
                 patch.object(mqtt.Client, "_create_socket_connection", return_value="proxied") as parent, \

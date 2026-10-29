@@ -32,7 +32,11 @@ class MqttClient(mqtt.Client):
     mwa.mpsa.com resolves to several brokers, but the resolver keeps returning them in the same
     order until its cache expires, so paho kept reconnecting to the same unreachable one.
     TLS still uses the host name (paho wraps the socket with server_hostname=self._host).
+    Callbacks use the paho 2 signatures (CallbackAPIVersion.VERSION2).
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(mqtt.CallbackAPIVersion.VERSION2, *args, **kwargs)
 
     def _create_socket_connection(self):
         if self._get_proxy():

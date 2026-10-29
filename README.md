@@ -60,6 +60,7 @@ Hours need to be in the following format "23h12".
 You can modify a price manually in the dashboard. It can be useful if you use public charge point.
 ## V. Connection to other services:
 - [Domoticz](docs/domoticz/Domoticz.md)
+- Home Assistant through your own MQTT broker (MQTT discovery), see [this page](docs/home_assistant_mqtt.md)
 - [HomeAssistant](https://github.com/Flodu31/HomeAssistant-PeugeotIntegration)
 - Jeedom (Anyone can share the procedure ?)
 - You can send live car status to ABRP (A better Route Planner), see [this page](docs/abrp.md)

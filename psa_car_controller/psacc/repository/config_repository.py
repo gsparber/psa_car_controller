@@ -4,8 +4,9 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, StatisticsError
 
 from configupdater import ConfigUpdater
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler
+from pydantic_core import core_schema
+from typing import Any, List, Optional
 
 from psa_car_controller.psacc.application.battery_charge_curve import BatteryChargeCurve
 from psa_car_controller.psacc.model.charge import Charge
@@ -18,7 +19,7 @@ currency = €
 export_format = csv
 # minimum trip length in km so it's added to stats and map in website
 minimum trip length =
-# for future use
+# km or mi: unit of distances, speeds and consumptions on the web pages, recorded data stays in km
 length unit = km
 [Electricity config]
 # price by kw/h
@@ -33,6 +34,18 @@ high speed dc charge price =
 # minimum power in kW that should be delivered during a charge so it can be considered as a high speed charger
 high speed dc charge threshold =
 charger efficiency =
+[Home Assistant MQTT]
+# publish the cars and their remote commands to Home Assistant through your own MQTT broker (MQTT discovery)
+enabled = false
+# your broker, e.g. 192.168.1.10 or core-mosquitto; nothing connects while it's empty
+host =
+port = 1883
+username =
+password =
+# true to connect to the broker with TLS
+tls = false
+discovery prefix = homeassistant
+base topic = psa_car_controller
 """
 
 
@@ -58,13 +71,14 @@ class Hour(str):
     minutes: int
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, _source_type: Any, _handler: GetCoreSchemaHandler):
+        return core_schema.no_info_plain_validator_function(
+            cls.validate, serialization=core_schema.plain_serializer_function_ser_schema(str))
 
     @classmethod
     def validate(cls, v):
         if not isinstance(v, str):
-            raise TypeError('string required')
+            raise ValueError('string required')
         if len(v) == 0:
             return None
 
@@ -84,21 +98,27 @@ currency = ""
 CONFIG_FILENAME = "config.ini"
 
 
-class GeneralConfig(BaseModel):
+class SectionConfig(BaseModel):
+    # the web settings assign values one by one, numbers typed in text fields (e.g. a numeric password)
+    # arrive as numbers: check and convert each value right away, an invalid one never reaches the config
+    model_config = ConfigDict(coerce_numbers_to_str=True, validate_assignment=True)
+
+
+class GeneralConfig(SectionConfig):
     currency: str = "€"
     length_unit: str = "km"
     minimum_trip_length: float = 10
-    export_format = "csv"
+    export_format: str = "csv"
 
 
-class ElectricityPriceConfig(BaseModel):
-    day_price: float = 0.15
-    night_price: float = None
-    night_hour_start: Hour = None
-    night_hour_end: Hour = None
-    dc_charge_price: float = None
-    high_speed_dc_charge_price: float = None
-    high_speed_dc_charge_threshold: float = None
+class ElectricityPriceConfig(SectionConfig):
+    day_price: Optional[float] = 0.15
+    night_price: Optional[float] = None
+    night_hour_start: Optional[Hour] = None
+    night_hour_end: Optional[Hour] = None
+    dc_charge_price: Optional[float] = None
+    high_speed_dc_charge_price: Optional[float] = None
+    high_speed_dc_charge_threshold: Optional[float] = None
     charger_efficiency: float = 0.8942
 
     @staticmethod
@@ -153,9 +173,24 @@ class ElectricityPriceConfig(BaseModel):
         return self.day_price is not None
 
 
+class HomeAssistantMqttConfig(SectionConfig):
+    enabled: bool = False
+    host: Optional[str] = None
+    port: int = 1883
+    username: Optional[str] = None
+    password: Optional[str] = None
+    tls: bool = False
+    discovery_prefix: str = "homeassistant"
+    base_topic: str = "psa_car_controller"
+
+    def is_enable(self) -> bool:
+        return bool(self.enabled and self.host)
+
+
 class ConfigRepository(BaseModel):
     General: GeneralConfig
     Electricity_config: ElectricityPriceConfig
+    Home_Assistant_MQTT: HomeAssistantMqttConfig = Field(default_factory=HomeAssistantMqttConfig)
 
     @staticmethod
     def _read_file(name):
@@ -183,7 +218,7 @@ class ConfigRepository(BaseModel):
         return config
 
     def config_dto_to_config_file(self, config):
-        res = replace_key_underscore_by_space(self.dict(), None)
+        res = replace_key_underscore_by_space(self.model_dump(), None)
         for section, option in res.items():
             for key, value in option.items():
                 config[section][key] = value
@@ -193,8 +228,7 @@ class ConfigRepository(BaseModel):
     def write_config(self, name=None):
         if name is None:
             name = CONFIG_FILENAME
-        self.validate(self)
-        ConfigRepository(**self.dict())  # validate property before write
+        ConfigRepository(**self.model_dump())  # validate property before write
         config_to_write = ConfigRepository.get_default_config()
         self.config_dto_to_config_file(config_to_write)
         self._write(name, config_to_write)

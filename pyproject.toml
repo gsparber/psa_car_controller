@@ -12,7 +12,7 @@ include = [
 
 [tool.poetry.dependencies]
 python = ">=3.11, <4.0.0"
-paho-mqtt = ">=1.5.0, <2.0.0"
+paho-mqtt = ">=2.1.0, <3.0.0"
 dash = ">=4.0.0, <5.0.0"
 dash-daq = "^0.6.0"
 plotly = "^6.7.0"
@@ -30,7 +30,7 @@ reverse-geocode = "^1.4.1"
 androguard = "^4.1.2"
 playwright = { version = ">=1.44.0", markers = "platform_machine not in 'armv7l'" }
 pycryptodomex = "3.23.0"  # Pin version as they introduce breaking changes in minor versions
-pydantic = "^1.9.0"
+pydantic = "^2.4.0"
 "ruamel.yaml" = ">=0.15.0"
 certifi = ">=2026.10.19"
 six = ">=1.10"

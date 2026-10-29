@@ -7,6 +7,7 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from psa_car_controller.psacc.application.charging import Charging
+from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
@@ -46,7 +47,8 @@ def _status(car, pending):
     return html.Div([
         html.Div([
             html.Div([html.Span(status_text.format_int(elec.level, "%"), className="stat-value"),
-                      html.Span(status_text.format_int(elec.autonomy, "km"), className="ms-2 text-body-secondary")]),
+                      html.Span(status_text.format_distance(elec.autonomy, units.current()),
+                                className="ms-2 text-body-secondary")]),
             html.Div([text, f" · {status_text.format_power(power)}" if power else None], className="charging-line"),
         ]),
         action_button("charge", car.vin, label, color="danger" if charging_now else "primary",

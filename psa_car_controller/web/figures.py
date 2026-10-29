@@ -12,6 +12,7 @@ from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.repository.trips import Trip
 from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 
 # pylint: disable=invalid-name
@@ -37,13 +38,16 @@ AVG_CONSUM_KW = "avg_consum_kw"
 AVG_CONSUM_PRICE = "avg_consum_price"
 CURRENCY = "€"
 EXPORT_FORMAT = "csv"
+# display unit (km or mi), the data given to the figures has to be converted to it (units.convert_rows)
+UNIT = units.KM
 
 
 def get_summary_cards():
-    return {"Average consumption": {"text": [card_value_div(AVG_CONSUM_KW, "kWh/100km"),
-                                             card_value_div(AVG_CONSUM_PRICE, f"{CURRENCY}/100km")],
+    dist = units.distance_label(UNIT)
+    return {"Average consumption": {"text": [card_value_div(AVG_CONSUM_KW, units.consumption_label(UNIT)),
+                                             card_value_div(AVG_CONSUM_PRICE, f"{CURRENCY}/100{dist}")],
                                     "src": dash_app.get_asset_url("images/consumption.svg")},
-            "Average emission": {"text": [card_value_div(AVG_EMISSION_KM, " g/km"),
+            "Average emission": {"text": [card_value_div(AVG_EMISSION_KM, f" g/{dist}"),
                                           card_value_div(AVG_EMISSION_KW, "g/kWh")],
                                  "src": dash_app.get_asset_url("images/pollution.svg")},
             "Average charge speed": {"text": [card_value_div(AVG_CHARGE_SPEED, " kW")],
@@ -74,6 +78,9 @@ def get_figures(car: Car):
         showlegend=False, name="Last Position"))
     # table
     nb_format = Format(precision=2, scheme=Scheme.fixed, symbol=Symbol.yes, group=Group.yes)
+    dist = units.distance_label(UNIT)
+    consumption_label = units.consumption_label(UNIT)
+    speed_label = units.speed_label(UNIT)
     style_cell_conditional = []
     if car.is_electric():
         style_cell_conditional.append({'if': {'column_id': 'consumption_fuel_km', }, 'display': 'None', })
@@ -92,17 +99,18 @@ def get_figures(car: Car):
         },
         columns=[{'id': 'id', 'name': '#', 'type': 'numeric'},
                  {'id': 'start_at_str', 'name': 'start at', 'type': 'datetime'},
+                 {'id': 'end_at_str', 'name': 'end at', 'type': 'datetime'},
                  {'id': 'duration', 'name': 'duration', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" min").precision(0)},
                  {'id': 'speed_average', 'name': 'avg. speed', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(" km/h").precision(0)},
+                  'format': deepcopy(nb_format).symbol_suffix(f" {speed_label}").precision(0)},
                  {'id': 'consumption_km', 'name': 'avg. consumption', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(" kWh/100km")},
+                  'format': deepcopy(nb_format).symbol_suffix(f" {consumption_label}")},
                  {'id': 'consumption_fuel_km', 'name': 'average consumption fuel', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(" L/100km")},
+                  'format': deepcopy(nb_format).symbol_suffix(f" {units.consumption_label(UNIT, 'L')}")},
                  {'id': 'distance', 'name': 'distance', 'type': 'numeric',
-                  'format': nb_format.symbol_suffix(" km").precision(1)},
-                 {'id': 'mileage', 'name': 'mileage', 'type': 'numeric',
+                  'format': deepcopy(nb_format).symbol_suffix(f" {dist}").precision(1)},
+                 {'id': 'mileage', 'name': f'mileage ({dist})', 'type': 'numeric',
                   'format': nb_format},
                  {'id': 'altitude_diff', 'name': 'altitude diff', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" m").precision(0)}
@@ -124,7 +132,7 @@ def get_figures(car: Car):
     # consumption_fig
     consumption_fig = px.histogram(x=[0], y=[1], title='Consumption of the car',
                                    histfunc="avg")
-    consumption_fig.update_layout(yaxis_title="Consumption kWh/100Km", xaxis_title="date")
+    consumption_fig.update_layout(yaxis_title=f"Consumption {consumption_label}", xaxis_title="date")
     consumption_fig.update_xaxes(type="date", tickformat="%d/%m/%Y")
 
     consumption_fig_by_speed = px.histogram(data_frame=[{"start_at": 1, "speed_average": 2}], x="start_at",
@@ -134,7 +142,8 @@ def get_figures(car: Car):
     consumption_fig_by_speed.update_layout(bargap=0.05)
     consumption_fig_by_speed.add_trace(go.Scatter(mode="markers", x=[0],
                                                   y=[0], name="Trips"))
-    consumption_fig_by_speed.update_layout(xaxis_title="average Speed km/h", yaxis_title="Consumption kWh/100Km")
+    consumption_fig_by_speed.update_layout(xaxis_title=f"average Speed {speed_label}",
+                                           yaxis_title=f"Consumption {consumption_label}")
     # battery_table
     battery_table = DataTable(
         id='battery-table',
@@ -161,7 +170,7 @@ def get_figures(car: Car):
                  {'id': 'price', 'name': 'price', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" " + CURRENCY).precision(2), 'editable': True},
                  {'id': 'charging_mode', 'name': 'charging mode', 'type': 'text'},
-                 {'id': 'mileage', 'name': 'mileage', 'type': 'numeric', 'format': nb_format},
+                 {'id': 'mileage', 'name': f'mileage ({dist})', 'type': 'numeric', 'format': nb_format},
                  ],
         data=[],
         page_size=50,
@@ -205,7 +214,7 @@ def get_figures(car: Car):
         go.Scatter(mode="markers", x=[0],
                    y=[0], name="Trips"))
     consumption_fig_by_temp.update_layout(xaxis_title="average temperature in °C",
-                                          yaxis_title="Consumption kWh/100Km")
+                                          yaxis_title=f"Consumption {consumption_label}")
     return True
 
 
@@ -226,7 +235,7 @@ def get_altitude_fig(trip: Trip):
                                       (trip.start_at, trip.end_at)).fetchall()))
     start_mileage = res[0][0]
     for line in res:
-        line[0] = line[0] - start_mileage
+        line[0] = units.distance(line[0] - start_mileage, UNIT)
     fig = px.line(res, x=0, y=1)
-    fig.update_layout(xaxis_title="Distance km", yaxis_title="Altitude m")
+    fig.update_layout(xaxis_title=f"Distance {units.distance_label(UNIT)}", yaxis_title="Altitude m")
     return html.Div(Graph(figure=fig))

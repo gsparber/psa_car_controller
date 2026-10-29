@@ -72,7 +72,8 @@ function filterDataset (data, range) {
 
 function filterShortTrip (data, minimumLength) {
   const longTrips = {
-    trips: data.trips.filter(line => line.distance > minimumLength),
+    // minimumLength is in km, distance can be in miles (then distance_km keeps the km)
+    trips: data.trips.filter(line => ('distance_km' in line ? line.distance_km : line.distance) > minimumLength),
     chargings: data.chargings
   }
   console.log('long trips:', longTrips)

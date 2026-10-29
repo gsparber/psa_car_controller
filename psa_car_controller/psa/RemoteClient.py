@@ -9,6 +9,8 @@ from os import environ
 from typing import Callable, List, Optional
 
 import paho.mqtt.client as mqtt
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.reasoncodes import ReasonCode
 from requests import RequestException, Timeout
 
 from psa_car_controller.psacc.model.car import Cars
@@ -39,6 +41,7 @@ MQTT_TOKEN_TTL = 890
 # MAX_REFRESH_DELAY seconds, so refreshing on every disconnect would burn the
 # refresh_token_now() rate limit (6 per 30 min) during a mere network outage.
 MAX_REFRESH_DELAY = 120
+KEEPALIVE_TIMEOUT = ReasonCode(PacketTypes.DISCONNECT, "Keep alive timeout")
 # The remote refresh token's server-side lifetime is about 24h: a grant attempted 24h
 # (plus a few seconds) after the previous one fails with 'invalid_grant', and each grant
 # rotates the token. The __keep_mqtt timer is the ONLY periodic refresh on an idle car,
@@ -155,12 +158,19 @@ class RemoteClient:
         # successful connect: exposed on /health so a dead remote control doesn't go unnoticed
         self.mqtt_auth_failures = 0
         self.mqtt_last_connect: Optional[datetime] = None
+        # the broker refused the last CONNACK: the disconnect following it isn't an expired token
+        self._mqtt_connect_refused = False
 
-    def __on_mqtt_connect(self, client, userdata, flags, result_code):  # pylint: disable=unused-argument
-        logger.info("Connected with result code %s", result_code)
-        if result_code == 0:
-            self.mqtt_auth_failures = 0
-            self.mqtt_last_connect = datetime.now(timezone.utc)
+    def __on_mqtt_connect(self, client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
+        logger.info("Connected with result code %s", reason_code)
+        if reason_code.is_failure:
+            # paho calls on_disconnect right after, but only with a generic reason code
+            self._mqtt_connect_refused = True
+            self.mqtt_auth_failures += 1
+            logger.warning("MQTT credentials refused %d times in a row", self.mqtt_auth_failures)
+            return
+        self.mqtt_auth_failures = 0
+        self.mqtt_last_connect = datetime.now(timezone.utc)
         topics = [MQTT_RESP_TOPIC + self.account_info.get_mqtt_customer_id() + "/#"]
         for car in self.vehicles_list:
             topics.append(MQTT_EVENT_TOPIC + car.vin)
@@ -168,19 +178,18 @@ class RemoteClient:
             client.subscribe(topic)
             logger.info("subscribe to %s", topic)
 
-    def _on_mqtt_disconnect(self, client, userdata, result_code):  # pylint: disable=unused-argument
+    def _on_mqtt_disconnect(self, client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
         # the client reconnects on its own, so report the reason on a single line
-        logger.warning("MQTT disconnected (%d): %s", result_code, mqtt.error_string(result_code))
-        if result_code == 1:
-            self._refresh_remote_token(force=True)
-        elif result_code == 7:
-            # the broker closes the socket without CONNACK when the access token is expired:
-            # paho then retries forever with the same stale token unless it is refreshed here.
-            # Throttling is handled inside _refresh_remote_token.
-            self._refresh_remote_token(force=True)
-        elif result_code == mqtt.MQTT_ERR_CONN_REFUSED:
-            self.mqtt_auth_failures += 1
-            logger.warning("MQTT credentials refused %d times in a row", self.mqtt_auth_failures)
+        logger.warning("MQTT disconnected: %s", reason_code)
+        refused, self._mqtt_connect_refused = self._mqtt_connect_refused, False
+        # paho 2 reports a lost connection (socket closed, no CONNACK) only as "Unspecified error";
+        # a keepalive timeout is a network problem, a refused CONNACK is counted in on_connect
+        if refused or not reason_code.is_failure or reason_code == KEEPALIVE_TIMEOUT:
+            return
+        # the broker closes the socket without CONNACK when the access token is expired:
+        # paho then retries forever with the same stale token unless it is refreshed here.
+        # Throttling is handled inside _refresh_remote_token.
+        self._refresh_remote_token(force=True)
 
     def _on_mqtt_message(self, client, userdata, msg):  # pylint: disable=unused-argument
         try:

@@ -298,7 +298,7 @@ def settings_section(section: str):
         typed_value = convert_to_number_if_number_else_return_str(value)
         setattr(config_section, key, typed_value)
         APP.config.write_config()
-    return json_response(config_section.json())
+    return json_response(config_section.model_dump_json())
 
 
 @app.route('/vehicles/trips')
@@ -364,7 +364,7 @@ def get_chargings():
 
 @app.route('/settings')
 def settings():
-    return json_response(APP.config.json())
+    return json_response(APP.config.model_dump_json(exclude={"Home_Assistant_MQTT": {"password"}}))
 
 
 @app.route('/battery/soh/<string:vin>')

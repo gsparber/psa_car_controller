@@ -10,6 +10,7 @@ from dash.exceptions import PreventUpdate
 from psa_car_controller import __version__
 from psa_car_controller.psa.constants import BRAND, realm_info
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME
+from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import ui
 from psa_car_controller.web.view.car_access import app, read
@@ -21,6 +22,7 @@ CONTENT = "settings-content"
 STATE_STORE = "settings-state"
 POLL = "settings-poll"
 RECONNECT = "settings-reconnect"
+UNITS = "settings-units"
 
 # account states
 NO_ACCOUNT, LOGIN_FAILED, LOGGED_IN = "none", "failed", "ok"
@@ -113,6 +115,32 @@ def render(state):
     return sections
 
 
+def _units():
+    return ui.section("Units", [
+        # same look as the period chips, but no browser persistence: config.ini holds the choice
+        dbc.RadioItems(id=UNITS, value=units.current(),
+                       options=[{"label": label, "value": key} for key, label in units.UNITS.items()],
+                       inline=True, className="segmented", inputClassName="btn-check",
+                       labelClassName="segment", labelCheckedClassName="active"),
+        html.Small("For distances, speeds and consumptions on all pages. Recorded data stays in km.",
+                   className="text-body-secondary d-block")])
+
+
+def set_length_unit(unit):
+    """Saves the display unit in config.ini (General / length unit); False when it can't be written."""
+    unit = units.normalize(unit)
+    config = app().config
+    previous = config.General.length_unit
+    config.General.length_unit = unit
+    try:
+        config.write_config()
+    except (OSError, ValueError):
+        logger.exception("Can't save the length unit")
+        config.General.length_unit = previous
+        return False
+    return True
+
+
 def _more():
     version = "v" + __version__
     return ui.section("More", [html.Div([
@@ -130,6 +158,7 @@ def get_settings_layout():
         dcc.Store(id=STATE_STORE, data=state),
         dcc.Interval(id=POLL, interval=10 * 1000),
         html.Div(render(state), id=CONTENT),
+        _units(),
         _more(),
     ], className="page")
 
@@ -152,3 +181,12 @@ def reconnect(n_clicks):
     if remote_state() == REMOTE_OK:
         return ui.toast_message("Remote control connected")
     return ui.toast_message("Still not connected, set up the OTP again", ok=False)
+
+
+@dash_app.callback(*ui.toast_outputs(), Input(UNITS, "value"), prevent_initial_call=True)
+def change_units(unit):
+    if not unit or units.normalize(unit) == units.current():
+        raise PreventUpdate
+    if not set_length_unit(unit):
+        return ui.toast_message("Can't save the setting, see the log", ok=False)
+    return ui.toast_message("Units: " + ("miles" if units.normalize(unit) == units.MI else "kilometres"))

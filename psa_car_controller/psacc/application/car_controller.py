@@ -13,6 +13,8 @@ import psa_car_controller
 
 from .charge_control import ChargeControls
 from .charging import Charging
+from .ha_mqtt import HomeAssistantMqtt
+from psa_car_controller.common.sensitive_filter import sensitive_filter
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.utils.utils import Singleton
@@ -65,6 +67,8 @@ class PSACarController(metaclass=Singleton):
         self.offline = self.args.offline
         self.remote_control = not (self.args.remote_disable or self.offline)
         self.config = ConfigRepository.read_config()
+        self.home_assistant: Optional[HomeAssistantMqtt] = None
+        sensitive_filter.add_source(lambda: [self.config.Home_Assistant_MQTT.password])
 
     def start_remote_control(self):
         if self.args.remote_disable:
@@ -130,6 +134,7 @@ class PSACarController(metaclass=Singleton):
                 self.__retry_connection(self.CONNECTION_RETRY_DELAY)
             else:
                 logger.error("Please reconnect by going to config web page")
+        self.start_home_assistant()
         if self.saving_config:
             self.save_config()
         else:
@@ -138,6 +143,19 @@ class PSACarController(metaclass=Singleton):
             atexit.register(self.save_config)
             self.__save_config_periodically()
         return True
+
+    def start_home_assistant(self):
+        """Publish to Home Assistant through the user's MQTT broker, only when enabled in config.ini."""
+        if getattr(self, "home_assistant", None) is not None:
+            # load_app runs again after a login: a new one publishes the cars of the new PSA client
+            self.home_assistant.stop()
+            self.home_assistant = None
+        ha_config = self.config.Home_Assistant_MQTT
+        if not ha_config.is_enable():
+            return
+        self.home_assistant = HomeAssistantMqtt(ha_config, self.myp, lambda: self.chc,
+                                                remote_enabled=self.remote_control)
+        self.home_assistant.start()
 
     def __start_services(self):
         self.myp.manager.start_scheduled_refresh()

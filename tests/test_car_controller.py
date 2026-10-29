@@ -76,6 +76,7 @@ class TestLoadAppAgain(unittest.TestCase):
         self.app.args = SimpleNamespace(debug=0, config="config.json", web_conf=True, offline=True, record=False,
                                         refresh=None, remote_disable=True, charge_control=None)
         self.app.config = MagicMock()
+        self.app.config.Home_Assistant_MQTT.is_enable.return_value = False
         self.app.chc = None
         self.app.saving_config = False
         self.app.retry_timer = None

@@ -1,4 +1,4 @@
-ARG PYTHON_DEP='python3 python3-pandas python3-six python3-dateutil python3-brotli libatlas3-base python3-lxml python3-yaml python3-flask python3-paho-mqtt python3-ruamel.yaml ca-certificates python3-numpy'
+ARG PYTHON_DEP='python3 python3-pandas python3-six python3-dateutil python3-brotli libatlas3-base python3-lxml python3-yaml python3-flask python3-ruamel.yaml ca-certificates python3-numpy'
 # python3-scipy depends on pythran, which pulls in gcc, g++ and boost; only the builder installs it
 ARG SCIPY_RUNTIME_DEP='python3-decorator libgfortran5 liblbfgsb0 libblas3 liblapack3'
 ARG DEBIAN_FRONTEND=noninteractive

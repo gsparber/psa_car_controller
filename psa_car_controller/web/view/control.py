@@ -6,6 +6,7 @@ from dash import html
 
 from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.tools.Button import Button
 from psa_car_controller.web.tools.Switch import Switch
@@ -37,13 +38,14 @@ def get_control_tabs(config):
         el = []
         buttons_row = []
         if car.status is not None:
+            unit = units.current()
             cards = OrderedDict({"Battery SOC": {"text": [card_value_div("battery_value", "%",
                                                                          value=convert_value_to_str(
                                                                              car.status.get_energy('Electric').level))],
                                                  "src": dash_app.get_asset_url("images/battery-charge.svg")},
-                                 "Mileage": {"text": [card_value_div("mileage_value", "km",
-                                                                     value=convert_value_to_str(
-                                                                         car.status.timed_odometer.mileage))],
+                                 "Mileage": {"text": [card_value_div("mileage_value", units.distance_label(unit),
+                                                                     value=convert_value_to_str(units.distance(
+                                                                         car.status.timed_odometer.mileage, unit)))],
                                              "src": dash_app.get_asset_url("images/mileage.svg")}
                                  })
             soh = Database.get_last_soh_by_vin(car.vin)

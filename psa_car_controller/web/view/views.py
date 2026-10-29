@@ -18,7 +18,7 @@ from psa_car_controller.psacc.model.charge import Charge
 from psa_car_controller.psacc.repository.trips import Trips
 
 from psa_car_controller.psacc.application.charging import Charging
-from psa_car_controller.web import figures
+from psa_car_controller.web import figures, units
 
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.psacc.repository.db import Database
@@ -50,6 +50,7 @@ CALLBACK_CREATED = False
 trips: Trips = Trips()
 chargings: List[dict]
 min_date = max_date = min_millis = max_millis = step = marks = cached_layout = None
+cached_unit = units.KM  # display unit the figures and cached_layout were built with
 APP = PSACarController()
 set_trips_provider(lambda: trips)
 
@@ -222,7 +223,8 @@ DATA_READY = False
 
 
 def update_trips():
-    global trips, chargings, cached_layout, min_date, max_date, min_millis, max_millis, step, marks, DATA_READY
+    global trips, chargings, cached_layout, cached_unit, min_date, max_date, min_millis, max_millis, step, marks, \
+        DATA_READY
     # we allow on thread waiting for no_concurrent_update_trip lock
     with utils.nonblocking(no_concurrent_update_trip) as locked:
         if not locked:
@@ -234,6 +236,7 @@ def update_trips():
             Database.add_altitude_to_db(conn)
             min_date = None
             max_date = None
+            cached_unit = figures.UNIT = units.current()
             if APP.is_good and APP.myp.vehicles_list:
                 car = get_default_car()  # todo handle multiple car
                 try:
@@ -276,8 +279,23 @@ def update_trips():
         return
 
 
+def _follow_unit_setting():
+    """The unit can be changed on the settings page: rebuild the figures (column and axis labels) for it."""
+    global cached_layout, cached_unit
+    unit = units.current()
+    if unit == cached_unit:
+        return
+    cached_layout = None
+    cached_unit = figures.UNIT = unit
+    try:
+        figures.get_figures(get_default_car())
+    except (IndexError, TypeError, AttributeError):
+        logger.debug("Can't rebuild the figures for %s", unit, exc_info=True)
+
+
 def serve_layout():
     global cached_layout
+    _follow_unit_setting()
     if cached_layout is None:
         while not DATA_READY:
             logger.debug("wait for trips data...")
@@ -309,7 +327,11 @@ def serve_layout():
                                       ["long", "start_at_str"], figures.trips_map)
             fig_filter.add_table("trips", figures.table_fig)
             fig_filter.add_table("chargings", figures.battery_table)
-            fig_filter.src = {"trips": trips.get_trips_as_dict(), "chargings": chargings}
+            # the database stays metric, only what the page gets is converted
+            # minimum trip length is in km: the trips keep "distance_km" for that filter (clientside.js)
+            fig_filter.src = {"trips": units.convert_rows(trips.get_trips_as_dict(), cached_unit,
+                                                          keep_km=("distance",)),
+                              "chargings": units.convert_chargings(chargings, cached_unit)}
             fig_filter.set_clientside_callback(dash_app, {"minimumLength": APP.config.General.minimum_trip_length})
             create_callback()
         except (IndexError, TypeError, NameError, AssertionError, NameError, AttributeError):

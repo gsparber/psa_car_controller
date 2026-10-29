@@ -9,6 +9,7 @@ from dash.exceptions import PreventUpdate
 from psa_car_controller.psacc.application.vehicle_picture import get_vehicle_picture
 from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, \
@@ -25,17 +26,17 @@ ABRP_SWITCH = "home-abrp"
 ABRP_OUT = "home-abrp-out"
 
 
-def _soc_ring(level, range_km):
+def _soc_ring(level, range_km, unit=units.KM):
     value = level if isinstance(level, (int, float)) else 0
     return html.Div(
         html.Div([
             html.Div(status_text.format_int(level, "%"), className="soc-value"),
-            html.Div(status_text.format_int(range_km, "km"), className="soc-range"),
+            html.Div(status_text.format_distance(range_km, unit), className="soc-range"),
         ], className="soc-inner"),
         className="soc-ring",
         style={"--soc": value},
         role="img",
-        **{"aria-label": f"Battery {level} percent, range {range_km} km"},
+        **{"aria-label": f"Battery {level} percent, range {status_text.format_distance(range_km, unit)}"},
     )
 
 
@@ -63,14 +64,15 @@ def _picture(car: Car):
 def _hero(car: Car, remote):
     elec = car.status.get_energy("Electric")
     fuel = car.status.get_energy("Fuel")
+    unit = units.current()
     updated = status_text.format_updated(read(lambda: elec.updated_at if car.has_battery() else fuel.updated_at))
     state = status_text.car_state_text(read(lambda: car.status.ignition.type),
                                        read(car.status.is_moving),
-                                       read(lambda: car.status.kinetic.speed))
+                                       read(lambda: car.status.kinetic.speed), unit)
     subtitle = " · ".join(filter(None, [state, f"updated {updated}" if updated else None]))
     charging = None
     if car.has_battery():
-        ring = _soc_ring(elec.level, elec.autonomy)
+        ring = _soc_ring(elec.level, elec.autonomy, unit)
         charging = status_text.charging_text(read(lambda: elec.charging.plugged), read(lambda: elec.charging.status),
                                              read(lambda: elec.charging.remaining_time))
         power = status_text.charge_power_kw(read(lambda: elec.charging.charging_rate), car.battery_power,
@@ -78,7 +80,7 @@ def _hero(car: Car, remote):
         if power:
             charging = f"{charging} · {status_text.format_power(power)}"
     else:
-        ring = _soc_ring(fuel.level, fuel.autonomy)
+        ring = _soc_ring(fuel.level, fuel.autonomy, unit)
     picture = _picture(car)
     privacy = status_text.privacy_text(read(lambda: car.status.privacy.state))
     refresh = action_button("refresh", car.vin, html.I(className="bi bi-arrow-clockwise"), color="link",
@@ -96,7 +98,8 @@ def _hero(car: Car, remote):
         html.Div([picture, ring], className="hero-visual" + (" with-picture" if picture is not None else "")),
         html.Div([html.I(className="bi bi-lightning-charge-fill me-1" if is_charging(car) else "bi bi-plug me-1"),
                   charging], className="text-center charging-line") if charging else None,
-        html.Div(f"Fuel {status_text.format_int(fuel.level, '%')} · {status_text.format_int(fuel.autonomy, 'km')}",
+        html.Div(f"Fuel {status_text.format_int(fuel.level, '%')} · "
+                 f"{status_text.format_distance(fuel.autonomy, unit)}",
                  className="text-center text-body-secondary") if car.is_hybrid() else None,
     ], className="home-hero")
 
@@ -125,9 +128,10 @@ def _tiles(car: Car, remote, pending):
 
 
 def _info(car: Car):
+    unit = units.current()
     info = [ui.info_row("bi-speedometer2", "Mileage",
-                        status_text.format_int(read(lambda: car.status.timed_odometer.mileage), "km"))]
-    service = status_text.maintenance_text(maintenance(car.vin))
+                        status_text.format_distance(read(lambda: car.status.timed_odometer.mileage), unit))]
+    service = status_text.maintenance_text(maintenance(car.vin), unit)
     if service:
         info.append(ui.info_row("bi-wrench-adjustable", "Next service", service))
     if car.has_battery():

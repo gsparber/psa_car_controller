@@ -1,10 +1,12 @@
 """How the home page shows car status values, kept free of Dash so it can be unit tested.
 
-Adapted from angelangelov88/psa_car_controller (feature/setup-ui, web/view/status_text.py), metric units.
+Adapted from angelangelov88/psa_car_controller (feature/setup-ui, web/view/status_text.py). Values
+come in metric; distances and speeds are shown in the unit passed in (see web/units.py).
 """
 from datetime import datetime, timezone
 
 from psa_car_controller.common.utils import parse_hour
+from psa_car_controller.web import units
 
 PRECOND_STATES = {"Enabled": "On", "Disabled": "Off", "Finished": "Finished", "Failure": "Failed"}
 PRECOND_FAILURE_CAUSES = {
@@ -28,6 +30,11 @@ def format_int(value, unit=""):
         return "–"
     text = f"{round(value):,}".replace(",", " ")
     return f"{text} {unit}".strip()
+
+
+def format_distance(km, unit=units.KM):
+    """A distance stored in km as a whole number in the display unit, e.g. "7 671 mi"."""
+    return format_int(units.distance(km, unit), units.distance_label(unit))
 
 
 def format_duration(iso):
@@ -85,10 +92,10 @@ def precond_failure_text(failure_cause):
     return PRECOND_FAILURE_CAUSES.get(failure_cause, failure_cause)
 
 
-def car_state_text(ignition, moving, speed_kmh):
+def car_state_text(ignition, moving, speed_kmh, unit=units.KM):
     """Parked, On or Driving (with the speed when the car gives one)."""
     if _is_number(speed_kmh) and speed_kmh > 0:
-        return f"Driving · {round(speed_kmh)} km/h"
+        return f"Driving · {round(units.distance(speed_kmh, unit))} {units.speed_label(unit)}"
     if moving is True:
         return "Driving"
     if ignition in IGNITION_ON:
@@ -126,7 +133,7 @@ def map_link_url(latitude, longitude):
     return f"https://www.google.com/maps/search/?api=1&query={latitude:.6f},{longitude:.6f}"
 
 
-def maintenance_text(maintenance):
+def maintenance_text(maintenance, unit=units.KM):
     """Distance and days left until the next service, e.g. "12 000 km · 150 days"; None when unknown.
 
     Both can be negative once the service is overdue."""
@@ -135,7 +142,7 @@ def maintenance_text(maintenance):
     parts = []
     mileage, days = maintenance.get("mileage"), maintenance.get("days")
     if _is_number(mileage):
-        parts.append(format_int(mileage, "km") if mileage >= 0 else f"{format_int(-mileage, 'km')} overdue")
+        parts.append(format_distance(mileage, unit) if mileage >= 0 else f"{format_distance(-mileage, unit)} overdue")
     if _is_number(days):
         unit = "day" if abs(days) == 1 else "days"
         parts.append(f"{format_int(days, unit)}" if days >= 0 else f"{format_int(-days, unit)} overdue")
