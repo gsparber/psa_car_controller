@@ -22,6 +22,8 @@ from psa_car_controller.psa.constants import realm_info, AUTHORIZE_SERVICE
 from .abrp import Abrp
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.common.mylogger import CustomLogger
+from psa_car_controller.common.sensitive_filter import sensitive_filter
+from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException
 
 SCOPE = ['openid profile']
 CARS_FILE = "cars.json"
@@ -78,12 +80,34 @@ class PSAClient:
                                           self.vehicles_list,
                                           self.manager,
                                           remote_credentials)
+        sensitive_filter.add_source(self.sensitive_values)
+
+    def sensitive_values(self):
+        remote_credentials = self.remote_client.remoteCredentials
+        return [self.manager.access_token, self.manager.refresh_token,
+                remote_credentials.access_token, remote_credentials.refresh_token,
+                self.service_information.client_secret,
+                # the MQTT customer id only differs from customer_id by its brand prefix
+                self.customer_id, self.customer_id and self.customer_id[2:]] + \
+            [car.vin for car in self.vehicles_list]
 
     def get_app_name(self):
         return realm_info[self.realm]['app_name']
 
+    def is_authenticated(self) -> bool:
+        return bool(self.manager.access_token) and not self.manager.needs_login
+
     def api(self) -> VehiclesApi:
-        self.api_config.access_token = self.manager.access_token
+        if self.manager.rejected_grant_retry_due():
+            try:
+                self.manager.refresh_token_now()
+            except RateLimitException as e:
+                logger.debug("Can't retry the rejected refresh token now: %s", e)
+        if not self.is_authenticated():
+            # don't call PSA with a token it already refused, until a new login
+            raise AuthenticationRequiredException()
+        access_token = self.manager.access_token
+        self.api_config.access_token = access_token
         api_instance = VehiclesApi(OauthAPIClient(self.api_config))
         return api_instance
 
@@ -131,12 +155,23 @@ class PSAClient:
                     self.get_vehicle_info(car.vin)
                 for callback in self.info_callback:
                     callback()
+            except AuthenticationRequiredException:
+                # already reported when the token was rejected, no traceback every refresh
+                logger.debug("refresh_vehicle_info: not connected")
             except BaseException:
                 logger.exception("refresh_vehicle_info: ")
 
     def start_refresh_thread(self):
         if self.refresh_thread is None:
             self.__refresh_vehicle_info()
+
+    def stop(self):
+        """Stop polling PSA and the remote control, for a client that is being replaced."""
+        # no refresh rate: a refresh running right now doesn't schedule the next one either
+        self.info_refresh_rate = None
+        if self.refresh_thread is not None:
+            self.refresh_thread.cancel()
+        self.remote_client.stop()
 
     def get_vehicles(self):
         try:

@@ -8,7 +8,6 @@ import pytz
 from deepdiff import DeepDiff
 
 from psa_car_controller.psa.RemoteClient import RemoteClient
-from psa_car_controller.psa.connected_car_api import Vehicles
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.model.car import Cars, Car
 from psa_car_controller.psacc.repository.db import Database
@@ -58,7 +57,7 @@ def get_date(offset):
 def get_rc() -> RemoteClient:
     account_info = MagicMock()
     account_info.realm = ""
-    return RemoteClient(account_info, Vehicles, None, None)
+    return RemoteClient(account_info, Cars(), None, None)
 
 
 def compare_dict(result, expected):

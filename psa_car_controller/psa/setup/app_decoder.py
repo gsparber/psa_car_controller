@@ -2,6 +2,8 @@
 import json
 import logging
 import traceback
+from os import path
+from typing import Optional
 
 import requests
 
@@ -9,7 +11,7 @@ from psa_car_controller.psa.constants import BRAND
 from psa_car_controller.psa.setup.apk_parser import ApkParser
 from psa_car_controller.psa.setup.github import urlretrieve_from_github
 from psa_car_controller.psacc.application.car_controller import PSACarController
-from psa_car_controller.psacc.application.psa_client import PSAClient
+from psa_car_controller.psacc.application.psa_client import PSAClient, DEFAULT_CONFIG_FILENAME
 from psa_car_controller.psacc.application.charge_control import ChargeControl, ChargeControls
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,27 @@ class InitialSetup:
         self.user_info = None
         self.customer_id = None
         try:
+            self.token = self.__fetch_brand_token(apk_parser, client_email, client_password)
+            self.user_info = self.__fetch_user_info()
+        except ConnectionError:
+            # The brand login only provides the customer id and the car labels. When config.json
+            # already has them, the OAuth login alone is enough to renew the connection.
+            self.psacc = self.__load_existing_config()
+            if self.psacc is None:
+                raise
+            logger.warning("The brand login service failed, renewing only the OAuth tokens of %s",
+                           DEFAULT_CONFIG_FILENAME)
+            self.customer_id = self.psacc.customer_id
+            return
+        self.customer_id = BRAND[self.package_name]["brand_code"] + "-" + self.user_info["id"]
+
+        self.psacc = PSAClient(None, self.client_id, self.client_secret,
+                               None, self.customer_id, BRAND[self.package_name]["realm"],
+                               self.country_code, BRAND[self.package_name]["brand_code"])
+
+    @staticmethod
+    def __fetch_brand_token(apk_parser: ApkParser, client_email, client_password) -> str:
+        try:
             res = requests.post(apk_parser.host_brandid_prod + "/GetAccessToken",
                                 headers={
                                     "Connection": "Keep-Alive",
@@ -55,14 +78,6 @@ class InitialSetup:
                                 timeout=TIMEOUT_IN_S
                                 )
             data = res.json()
-            if token := data.get("accessToken"):
-                self.token = token
-            elif token := data.get("token"):
-                self.token = token
-            else:
-                raise ConnectionError("No access token in response:", res.text)
-        except ConnectionError as e:
-            raise e
         except Exception as ex:
             msg = traceback.format_exc() + f"\nHOST_BRANDID : {apk_parser.host_brandid_prod} " \
                 f"sitecode: {apk_parser.site_code}"
@@ -71,15 +86,27 @@ class InitialSetup:
             except BaseException:
                 pass
             logger.error(msg)
-            raise ConnectionError(msg) from ex
+            # the details are in the log, the user only needs to know what to do
+            raise ConnectionError("The login service of the brand did not answer correctly. This is usually a "
+                                  "temporary problem on the Stellantis side, please try again later.") from ex
+        token = data.get("accessToken") or data.get("token")
+        if not token:
+            logger.error("No access token in response: %s", res.text)
+            raise ConnectionError(f"The login was refused: {data.get('returnCode', res.text)}")
+        return token
 
-        # Psacc
-        self.user_info = self.__fetch_user_info()
-        self.customer_id = BRAND[self.package_name]["brand_code"] + "-" + self.user_info["id"]
-
-        self.psacc = PSAClient(None, self.client_id, self.client_secret,
-                               None, self.customer_id, BRAND[self.package_name]["realm"],
-                               self.country_code, BRAND[self.package_name]["brand_code"])
+    def __load_existing_config(self) -> Optional[PSAClient]:
+        if not path.isfile(DEFAULT_CONFIG_FILENAME):
+            return None
+        try:
+            psacc = PSAClient.load_config(DEFAULT_CONFIG_FILENAME)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Can't reuse %s", DEFAULT_CONFIG_FILENAME)
+            return None
+        if psacc.realm != BRAND[self.package_name]["realm"]:
+            # configured for another brand, its customer id doesn't apply
+            return None
+        return psacc
 
     def __fetch_user_info(self):
         try:
@@ -111,8 +138,35 @@ class InitialSetup:
             except BaseException:
                 pass
             logger.error(msg)
-            raise ConnectionError(msg) from ex
+            raise ConnectionError("Can't get the account information from the brand, this is usually a "
+                                  "temporary problem on the Stellantis side, please try again later.") from ex
         return res_dict
+
+    @staticmethod
+    def __read_charge_settings(file_name) -> dict:
+        try:
+            with open(file_name, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            logger.warning("Can't read %s, charge control settings will be reset", file_name, exc_info=True)
+            return {}
+        if not isinstance(settings, dict):
+            logger.warning("Unexpected content in %s, charge control settings will be reset", file_name)
+            return {}
+        return settings
+
+    def __new_charge_control(self, vin, settings) -> ChargeControl:
+        if settings is not None:
+            if isinstance(settings, dict) and isinstance(settings.get("percentage_threshold", 100), int):
+                try:
+                    return ChargeControl(self.psacc, vin, settings.get("percentage_threshold", 100),
+                                         settings.get("stop_hour", [0, 0]))
+                except (ValueError, TypeError, IndexError):
+                    pass
+            logger.warning("Invalid charge control settings for %s will be reset: %s", vin, settings)
+        return ChargeControl(self.psacc, vin, 100, [0, 0])
 
     def connect(self, code, config_prefix=""):
         self.psacc.connect(code)
@@ -123,7 +177,7 @@ class InitialSetup:
             raise ValueError(
                 "No vehicle in your account is compatible with this API, you vehicle is probably too old...")
 
-        for vehicle in self.user_info["vehicles"]:
+        for vehicle in self.user_info["vehicles"] if self.user_info else []:
             if vin := vehicle.get("vin"):
                 car = self.psacc.vehicles_list.get_car_by_vin(vin)
                 if car is not None and "short_label" in vehicle and car.label == "unknown":
@@ -132,11 +186,12 @@ class InitialSetup:
 
         logger.info("\nYour vehicles: %s", res)
 
-        # Charge control
-        charge_controls = ChargeControls(config_prefix + "charge_config.json")
+        # Charge control: keep the settings of cars already configured, new cars start with charge control off
+        charge_config_name = config_prefix + "charge_config.json"
+        previous_settings = self.__read_charge_settings(charge_config_name)
+        charge_controls = ChargeControls(charge_config_name)
         for vehicle in res:
-            chc = ChargeControl(self.psacc, vehicle.vin, 100, [0, 0])
-            charge_controls[vehicle.vin] = chc
+            charge_controls[vehicle.vin] = self.__new_charge_control(vehicle.vin, previous_settings.get(vehicle.vin))
         charge_controls.save_config()
         app = PSACarController()
         app.load_app()

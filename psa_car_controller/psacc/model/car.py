@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 # pylint: disable=too-many-arguments,too-many-positional-arguments
 class Car:
     def __init__(self, vin, vehicle_id, brand, label=None, battery_power=None, fuel_capacity=None,
-                 max_elec_consumption=None, max_fuel_consumption=None, abrp_name=None):
+                 max_elec_consumption=None, max_fuel_consumption=None, abrp_name=None, precond_programs=None):
         self.vin = vin
         model = None
         if label is not None:
@@ -27,6 +27,9 @@ class Car:
         self.fuel_capacity = fuel_capacity or model.fuel_capacity
         self.max_elec_consumption = max_elec_consumption or model.max_elec_consumption  # kwh/100Km
         self.max_fuel_consumption = max_fuel_consumption or model.max_fuel_consumption  # L/100Km
+        # last preconditioning programs reported by the car, kept across restarts: a /ThermalPrecond
+        # command always carries the four programs and overwrites the ones stored in the car
+        self.precond_programs = precond_programs
 
     def set_model_name(self, name):
         self.label = name

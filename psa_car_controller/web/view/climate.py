@@ -8,7 +8,8 @@ from dash.exceptions import PreventUpdate
 
 from psa_car_controller.common.utils import validate_preconditioning_programs
 from psa_car_controller.web.app import dash_app
-from psa_car_controller.web.view import precond_programs, status_text, ui
+from psa_car_controller.psa import precond_programs
+from psa_car_controller.web.view import status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
     is_pending, is_preconditioning, read, remote_ready
 

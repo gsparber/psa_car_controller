@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from psa_car_controller.psacc.application.vehicle_picture import VehiclePicture
-from psa_car_controller.web.view import insights_data, precond_programs
+from psa_car_controller.psa import precond_programs
+from psa_car_controller.web.view import insights_data
 
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc)
 

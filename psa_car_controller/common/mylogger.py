@@ -1,6 +1,8 @@
 import logging
 from logging.handlers import RotatingFileHandler
 
+from psa_car_controller.common.sensitive_filter import sensitive_filter
+
 LOG_FILE = 'activity.log'
 
 DEBUG_LEVELV_NUM = 9
@@ -44,6 +46,8 @@ logger = logging.getLogger()
 file_handler = RotatingFileHandler(LOG_FILE, 'a', 1000000, 1, encoding='utf8')
 formatter = logging.Formatter('%(asctime)s :: %(levelname)s :: %(message)s')
 stream_handler = logging.StreamHandler()
+file_handler.addFilter(sensitive_filter)
+stream_handler.addFilter(sensitive_filter)
 
 
 def my_logger(handler_level=logging.INFO):

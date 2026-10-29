@@ -5,6 +5,9 @@ import socket
 import sys
 import threading
 from os import path
+from typing import Optional
+
+from requests import RequestException
 
 import psa_car_controller
 
@@ -16,6 +19,7 @@ from psa_car_controller.psacc.utils.utils import Singleton
 from .psa_client import PSAClient
 from psa_car_controller.common.mylogger import my_logger
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME, ConfigException
+from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller import __version__
 
 DEFAULT_NAME = "config.json"
@@ -44,12 +48,17 @@ def parse_args():
 
 
 class PSACarController(metaclass=Singleton):
+    CONNECTION_RETRY_DELAY = 60
+    CONNECTION_RETRY_MAX_DELAY = 900
+
     def __init__(self):
         self.args = parse_args()
         self.myp: PSAClient
         self.chc: ChargeControls = None
         self.config_name = DEFAULT_NAME
         self.is_good: bool = True
+        self.saving_config = False
+        self.retry_timer: Optional[threading.Timer] = None
         self.offline = self.args.offline
         self.remote_control = not (self.args.remote_disable or self.offline)
         self.config = ConfigRepository.read_config()
@@ -63,7 +72,11 @@ class PSACarController(metaclass=Singleton):
             try:
                 self.myp.remote_client.start()
                 if self.args.charge_control:
-                    self.chc = ChargeControls.load_config(self.myp, name=self.args.charge_control)
+                    chc = ChargeControls.load_config(self.myp, name=self.args.charge_control)
+                    # called again after a login or an OTP config: the previous charge controls must stop
+                    if self.chc is not None:
+                        self.chc.stop()
+                    self.chc = chc
                     self.chc.init()
                     self.myp.start_refresh_thread()
             except (socket.timeout, ConnectionResetError):
@@ -80,7 +93,12 @@ class PSACarController(metaclass=Singleton):
         if self.args.config:
             self.config_name = self.args.config
         if path.isfile(self.config_name):
+            previous_client = getattr(self, "myp", None)
             self.myp = PSAClient.load_config(name=self.config_name)
+            if previous_client is not None:
+                # load_app runs again after a login: the replaced client would keep polling PSA, keep its
+                # mqtt connection and could save its old tokens over the new ones on its next remote token refresh
+                previous_client.stop()
         elif self.args.web_conf:
             logger.error("No config file")
             self.is_good = False
@@ -89,33 +107,73 @@ class PSACarController(metaclass=Singleton):
             raise FileNotFoundError(self.config_name)
         if not Database.check_db_access():
             sys.exit(1)
-        atexit.register(self.save_config)
         self.myp.set_record(self.args.record)
         Charging.elec_price = self.config.Electricity_config
         if self.args.offline:
             logger.info("offline mode")
             self.is_good = True
         else:
-            self.is_good = False
-            self.is_good = self.myp.manager.refresh_token_now()
-            if self.is_good:
-                logger.info(str(self.myp.get_vehicles()))
-            else:
-                if self.args.web_conf:
-                    logger.error("Please reconnect by going to config web page")
-                else:
-                    logger.error("Connection need to be updated, Please redo authentication process.")
             if self.args.refresh:
                 self.myp.info_refresh_rate = self.args.refresh * 60
-                if self.is_good:
-                    self.myp.start_refresh_thread()
+            self.is_good = self.myp.manager.refresh_token_now()
             if self.is_good:
-                self.start_remote_control()
+                self.__start_services()
             elif not self.args.web_conf:
+                logger.error("Connection need to be updated, Please redo authentication process.")
                 raise ConnectionError
-        self.save_config()
+            elif self.__server_unreachable():
+                self.__retry_connection(self.CONNECTION_RETRY_DELAY)
+            else:
+                logger.error("Please reconnect by going to config web page")
+        if self.saving_config:
+            self.save_config()
+        else:
+            # load_app runs again after a login: one saving loop is enough
+            self.saving_config = True
+            atexit.register(self.save_config)
+            self.__save_config_periodically()
         return True
 
+    def __start_services(self):
+        logger.info(str(self.myp.get_vehicles()))
+        if self.args.refresh:
+            self.myp.start_refresh_thread()
+        self.start_remote_control()
+
+    def __server_unreachable(self) -> bool:
+        # a network failure says nothing about the stored token, unlike a rejected refresh token
+        return isinstance(self.myp.manager.last_refresh_error, RequestException)
+
+    def __retry_connection(self, delay):
+        logger.warning("Can't reach the PSA server, retrying to connect in %d s", delay)
+        if self.retry_timer is not None:
+            # load_app ran again meanwhile: keep a single retry loop
+            self.retry_timer.cancel()
+        self.retry_timer = threading.Timer(delay, self.__connect_again, [delay])
+        self.retry_timer.daemon = True
+        self.retry_timer.start()
+
+    def __connect_again(self, delay):
+        if self.is_good:  # already reconnected meanwhile, from the config web page for instance
+            return
+        next_delay = min(delay * 2, self.CONNECTION_RETRY_MAX_DELAY)
+        try:
+            self.is_good = self.myp.manager.refresh_token_now()
+        except RateLimitException as e:
+            logger.warning("Delaying the connection retry: %s", e)
+            self.__retry_connection(next_delay)
+            return
+        if self.is_good:
+            logger.info("Connection to the PSA server is back")
+            self.__start_services()
+        elif self.__server_unreachable():
+            self.__retry_connection(next_delay)
+        else:
+            logger.error("Please reconnect by going to config web page")
+
     def save_config(self):
-        threading.Timer(30, self.save_config).start()
         self.myp.save_config(self.config_name)
+
+    def __save_config_periodically(self):
+        threading.Timer(30, self.__save_config_periodically).start()
+        self.save_config()
