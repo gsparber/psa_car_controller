@@ -30,6 +30,8 @@ jobs:
           # docker tags allow [a-z0-9_.-] only: feature/modern-ui -> feature-modern-ui
           TAG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g' | cut -c1-120)
           echo "tags=${IMAGE}:${TAG},${IMAGE}:${TAG}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Login to GHCR
@@ -45,7 +47,7 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.prep.outputs.tags }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Image digest
