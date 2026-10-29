@@ -3,24 +3,16 @@ import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from dash import html
-
 from psa_car_controller.psa.RemoteClient import wakeup_limiter
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.remote_commands import RemoteCommands, PENDING_TIMEOUT
-from psa_car_controller.web import app as web_app
 from tests.test_remote_command_answers import CUSTOMER_ID, published
 from tests.test_remote_commands import get_ready_remote_client, VIN
+from tests.utils import get_web_view
 
 
 def get_car_access():
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        if web_app.app is None:  # run alone: the integration tests set the app up otherwise
-            web_app.config_flask("test", "/", False, "127.0.0.1", 0,
-                                 view="psa_car_controller.web.view.car_access")
-            web_app.dash_app.layout = html.Div()
-        from psa_car_controller.web.view import car_access  # pylint: disable=import-outside-toplevel
-    return car_access
+    return get_web_view("car_access")
 
 
 def text(component):

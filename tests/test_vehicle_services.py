@@ -6,8 +6,6 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from dash import html
-
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psa.extra_api import API_ROOT, ExtraApi, page_token
@@ -16,9 +14,9 @@ from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.application.vehicle_services import REFRESH_PERIOD, RETRY_DELAY, VehicleServices, \
     parse_rights, supported_commands
 from psa_car_controller.psacc.model.car import Car, Cars
-from psa_car_controller.web import app as web_app
 from psa_car_controller.web.view import status_text
 from tests.test_status_refresh import get_client, get_status, VIN
+from tests.utils import get_web_view
 
 DATE = "2022-03-26T11:02:54Z"
 MAINTENANCE_HREF = API_ROOT + "/connectedcar/v4/user/vehicles/vehicle-id/maintenance?locale=fr-FR"
@@ -321,12 +319,7 @@ class TestStatusText(unittest.TestCase):
 
 
 def get_view(name):
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        if web_app.app is None:  # run alone: the integration tests set the app up otherwise
-            web_app.config_flask("test", "/", False, "127.0.0.1", 0, view="psa_car_controller.web.view.api")
-            web_app.dash_app.layout = html.Div()
-        from psa_car_controller.web.view import api, home  # pylint: disable=import-outside-toplevel
-    return {"api": api, "home": home}[name]
+    return get_web_view(name)
 
 
 def text(component):

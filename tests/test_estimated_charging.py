@@ -6,15 +6,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from dash import html
-
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.model.car import Cars
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.repository.trips import Trips
-from psa_car_controller.web import app as web_app
 from psa_car_controller.web.view import insights_data
-from tests.utils import car, get_new_test_db, latitude, longitude
+from tests.utils import car, get_new_test_db, get_web_view, latitude, longitude
 
 START = datetime(2026, 1, 5, 8, 0, 0, tzinfo=timezone.utc)
 STEP = timedelta(minutes=10)
@@ -22,14 +19,7 @@ CARS = Cars([car])
 
 
 def get_views():
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        # run alone: the integration tests set the app up otherwise, so this file must sort after them
-        if web_app.app is None:
-            web_app.config_flask("test", "/", False, "127.0.0.1", 0, view="psa_car_controller.web.view.api")
-            web_app.dash_app.layout = html.Div()  # dash refuses requests without one
-        # pylint: disable=import-outside-toplevel
-        from psa_car_controller.web.view import api, charge
-    return api, charge
+    return get_web_view("api"), get_web_view("charge")
 
 
 def record_point(date, mileage, level, vin=car.vin):

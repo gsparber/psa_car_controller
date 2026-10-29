@@ -1,9 +1,14 @@
 import unittest
 from datetime import datetime, timedelta
+from http import HTTPStatus
 from unittest.mock import MagicMock
 from unittest import mock
 
-from psa_car_controller.psa.RemoteClient import KEEPALIVE_PERIOD, MAX_REFRESH_DELAY, MQTT_TOKEN_TTL, RemoteClient
+from oauth2_client.credentials_manager import OAuthError
+
+from psa_car_controller.common.utils import RateLimitException
+from psa_car_controller.psa.RemoteClient import KEEPALIVE_PERIOD, KEEPALIVE_RETRY_PERIOD, MAX_REFRESH_DELAY, \
+    MQTT_TOKEN_TTL, TOKEN_ACCOUNT_FAILED, TOKEN_RATE_LIMITED, TOKEN_REMOTE_FAILED, RemoteClient
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.otp.otp import ConfigException
 
@@ -102,6 +107,87 @@ class TestRefreshRemoteToken(unittest.TestCase):
         # THEN the token is refreshed
         self.assertTrue(refreshed)
         remote_client.manager.refresh_token_now.assert_called_once()
+    def test_refresh_failure_is_recorded_until_next_success(self):
+        # GIVEN a remote client whose account token refresh is rate limited
+        remote_client = get_remote_client()
+        remote_client.manager.refresh_token_now.side_effect = RateLimitException("refresh_token_now")
+
+        # WHEN the token is refreshed
+        refreshed = remote_client._refresh_remote_token(force=True)
+
+        # THEN the failure is kept so the settings page can show it, though mqtt may still be connected
+        self.assertFalse(refreshed)
+        self.assertEqual(TOKEN_RATE_LIMITED, remote_client.token_error)
+
+        # WHEN a later refresh succeeds
+        remote_client.manager.refresh_token_now.side_effect = None
+        self.assertTrue(remote_client._refresh_remote_token(force=True))
+
+        # THEN the error is cleared
+        self.assertIsNone(remote_client.token_error)
+
+    def failing_client(self, **refresh):
+        remote_client = get_remote_client()
+        remote_client.manager.refresh_token_now.configure_mock(**refresh)
+        self.addCleanup(lambda: remote_client.update_thread and remote_client.update_thread.cancel())
+        return remote_client
+
+    def test_each_failure_is_named(self):
+        cases = [(TOKEN_ACCOUNT_FAILED, {"return_value": False}),
+                 (TOKEN_ACCOUNT_FAILED, {"side_effect": OAuthError(HTTPStatus.BAD_GATEWAY, "server_error", "x")}),
+                 (TOKEN_REMOTE_FAILED, {"side_effect": ConfigException("x")})]
+        for error, refresh in cases:
+            with self.subTest(error=error, refresh=refresh):
+                remote_client = self.failing_client(**refresh)
+                self.assertFalse(remote_client._refresh_remote_token(force=True))
+                self.assertEqual(error, remote_client.token_error)
+
+    def test_waiting_for_a_new_login_is_an_account_failure(self):
+        # publishes fail here without even trying, so the socket alone would still say "connected"
+        remote_client = self.failing_client()
+        remote_client.manager.needs_login = True
+        remote_client.manager.rejected_grant_retry_due.return_value = False
+        self.assertFalse(remote_client._refresh_remote_token(force=True))
+        self.assertEqual(TOKEN_ACCOUNT_FAILED, remote_client.token_error)
+
+    def test_failure_retries_soon_and_for_real(self):
+        # GIVEN a forced refresh failed while the next keepalive is hours away
+        remote_client = self.failing_client(side_effect=RateLimitException("refresh_token_now"))
+        remote_client.remote_token_last_update = datetime.now() - timedelta(seconds=MAX_REFRESH_DELAY + 1)
+        remote_client._refresh_remote_token(force=True)
+
+        # THEN the retry the settings page tells about is scheduled
+        self.assertEqual(KEEPALIVE_RETRY_PERIOD, remote_client.update_thread.interval)
+
+        # WHEN it runs, the token still being within its TTL
+        remote_client.manager.refresh_token_now.side_effect = None
+        remote_client._RemoteClient__keep_mqtt()
+
+        # THEN it really refreshes, the error is gone and the regular cycle is back
+        remote_client.manager.post.assert_called_once()
+        self.assertIsNone(remote_client.token_error)
+        self.assertEqual(KEEPALIVE_PERIOD, remote_client.update_thread.interval)
+
+    def test_accepted_connection_clears_the_error(self):
+        # the refresh of a disconnect fails during an outage, then paho reconnects with the same token
+        remote_client = self.failing_client(return_value=False)
+        remote_client._refresh_remote_token(force=True)
+        client = MagicMock()
+
+        remote_client._RemoteClient__on_mqtt_connect(client, None, None, MagicMock(is_failure=True))
+        self.assertEqual(TOKEN_ACCOUNT_FAILED, remote_client.token_error)
+
+        remote_client._RemoteClient__on_mqtt_connect(client, None, None, MagicMock(is_failure=False))
+        self.assertIsNone(remote_client.token_error)
+
+    def test_start_clears_the_error(self):
+        # reconnect or a new OTP: the token is within its TTL, so the refresh in start() doesn't clear it
+        remote_client = self.failing_client()
+        remote_client.token_error = TOKEN_REMOTE_FAILED
+        remote_client.remote_token_last_update = datetime.now()
+        with mock.patch.object(remote_client, "load_otp", return_value=False):
+            remote_client.start()
+        self.assertIsNone(remote_client.token_error)
 
     def test_keepalive_period_is_well_under_token_lifetime(self):
         # Regression test for Sentry issue 150805222 / the daily invalid_grant: the remote

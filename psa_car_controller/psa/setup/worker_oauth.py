@@ -17,11 +17,24 @@ WORKER_TIMEOUT_S = 300
 MAX_MESSAGE_LENGTH = 300
 HTTP_OK = 200
 HTTP_TOO_MANY_REQUESTS = 429
+# wrong URL, wrong method, proxy timeout, rate limit: the login didn't run
+NO_LOGIN_STATUSES = (404, 405, 408, HTTP_TOO_MANY_REQUESTS)
+# stelloauth answers HTTP 400 to every failure, only the message tells them apart (worker.go, oauth.go). These ones say
+# the credentials never reached the login form, or that the session expired, which isn't their fault. Any other message
+# of a 4xx is taken as a rejection: the text comes from the login page, so it can't be listed, and when the credentials
+# may have been tried a second try could lock the account. Lower case, compared to the start of the message.
+NOT_REJECTED_MESSAGES = ("invalid request body", "missing required params", "invalid url", "service is busy",
+                         "browser backend unavailable", "failed to navigate", "login form not found",
+                         "failed to fill credentials", "the login took too long")
 LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".internal", ".home.arpa")
 
 
 class WorkerLoginError(Exception):
     """The login service gave no code. The message has no credentials and can be shown to the user."""
+
+
+class WorkerLoginRejected(WorkerLoginError):
+    """The login service tried the credentials and failed: don't send them to Stellantis a second time."""
 
 
 def worker_endpoint(worker_url: str) -> str:
@@ -73,6 +86,13 @@ def _read_answer(response) -> dict:
     return answer if isinstance(answer, dict) else {}
 
 
+def _is_rejection(status_code: int, message) -> bool:
+    # without a message of the service the 4xx comes from something in front of it, e.g. a proxy
+    if not message or not 400 <= status_code < 500 or status_code in NO_LOGIN_STATUSES:
+        return False
+    return not str(message).strip().lower().startswith(NOT_REJECTED_MESSAGES)
+
+
 def get_oauth_code_from_worker(worker_url: str, auth_url: str, email: str, password: str) -> str:
     """Asks the service to log in on auth_url (it holds our PKCE challenge) and returns the authorization code."""
     if not worker_url.strip().lower().startswith(("http://", "https://")):
@@ -105,4 +125,5 @@ def get_oauth_code_from_worker(worker_url: str, auth_url: str, email: str, passw
         reason = _clean_message(message, email, password)
     else:
         reason = "unexpected answer"
-    raise WorkerLoginError(f"Login service {host}: {reason} (HTTP {response.status_code})")
+    error = WorkerLoginRejected if _is_rejection(response.status_code, message) else WorkerLoginError
+    raise error(f"Login service {host}: {reason} (HTTP {response.status_code})")

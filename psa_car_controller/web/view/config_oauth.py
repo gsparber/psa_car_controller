@@ -1,9 +1,13 @@
 import logging
+import traceback
 
-from dash import callback_context, html, dcc
-from dash.exceptions import PreventUpdate
+from dash import html
 
 from psa_car_controller.web.app import dash_app
+from psa_car_controller.web.tools import jobs
+from psa_car_controller.web.tools.jobs import DONE, JobBusy, JobFailure, describe_error, scrub
+from psa_car_controller.web.view.job_view import job_active, job_parts, refused_view, register_job_view, \
+    start_outputs, started_view
 import dash_bootstrap_components as dbc
 from dash.dependencies import Output, Input, State
 
@@ -11,11 +15,14 @@ from psa_car_controller.web.view import config_views
 
 logger = logging.getLogger(__name__)
 
+OAUTH_PREFIX = "oauth"
+STEP_CONNECT = "Checking the code and reading your cars… This can take a minute."
+
 
 def get_oauth_config_layout(redirect_url):
-    return dbc.Row(dbc.Col(md=12, lg=2, className="m-3", children=[
+    return dbc.Row(dbc.Col(md=12, lg=2, className="my-3", children=[
         dbc.Row(html.H2('Connection to PSA (manual fallback)')),
-        dbc.Row(className="ms-2", children=[
+        dbc.Row(children=[
             html.Div(html.P([
                 "Automatic login failed. Complete the OAuth flow manually:", html.Br(),
                 html.A("1. Click here", href=redirect_url, target="_blank"), html.Br(),
@@ -35,28 +42,57 @@ def get_oauth_config_layout(redirect_url):
                         "PSA code from step above, or the whole xxxx://oauth2redirect... URL",
                         color="secondary",
                     )]),
-                dbc.Row(dbc.Button("Submit", color="primary", id="finish-oauth")),
-                dcc.Loading(
-                    id="loading-2",
-                    children=[html.Div([html.Div(id="oauth-result")])],
-                    type="circle",
-                ),
+                dbc.Row(dbc.Button("Submit", color="primary", id="finish-oauth",
+                                   disabled=job_active(config_views.LOGIN_JOB))),
+                *job_parts(OAUTH_PREFIX, config_views.LOGIN_JOB),
+                html.Div(id="oauth-result", className="mt-2", **{"aria-live": "polite"}),
             ])
         ])]))
 
 
+def _connect_with_code(setup, code):
+    """Runs in the thread of the job: the code works once, an answer lost on the way must not cost a new login."""
+    try:
+        setup.connect(code)
+        return "PSA login finish !", None
+    except Exception as e:
+        logger.error("finish_oauth: %s", scrub(traceback.format_exc(), (code,)))
+        raise JobFailure(describe_error(e)) from e
+
+
+def render_oauth(state):
+    if state.status != DONE:
+        return dbc.Alert(state.message, color="danger")
+    return dbc.Alert(["PSA login finish !", html.A(" Continue with remote control setup",
+                                                   href=dash_app.get_relative_path("/config"))], color="success")
+
+
 @dash_app.callback(
-    Output("oauth-result", "children"),
+    Output("oauth-result", "children", allow_duplicate=True),
+    *start_outputs(OAUTH_PREFIX, "finish-oauth"),
     Input("finish-oauth", "n_clicks"),
-    State("psa-oauth-code", "value"))
-def finish_oauth(n_clicks, code):  # pylint: disable=unused-argument
-    ctx = callback_context
-    if ctx.triggered:
-        try:
-            config_views.INITIAL_SETUP.connect(code)
-            return dbc.Alert(["PSA login finish !", html.A(" Continue with remote control setup",
-                             href=dash_app.get_relative_path("/config"))], color="success")
-        except Exception as e:
-            logger.exception("finish_oauth:")
-            return dbc.Alert(str(e), color="danger")
-    raise PreventUpdate()
+    State("psa-oauth-code", "value"),
+    State(f"{OAUTH_PREFIX}-job", "data"),
+    prevent_initial_call=True,
+    running=[(Output("finish-oauth", "disabled"), True, False)])
+def finish_oauth(n_clicks, code, stored=None):  # pylint: disable=unused-argument
+    setup = config_views.INITIAL_SETUP
+    if setup is None:
+        return refused_view(dbc.Alert("This login is gone, the app has probably restarted. Please start again from "
+                                      "the login form.", color="danger"))
+
+    def work(_):
+        return _connect_with_code(setup, code)
+
+    try:
+        started = jobs.JOBS.start(config_views.LOGIN_JOB, work, step=STEP_CONNECT,
+                                  timeout_s=config_views.OTP_TIMEOUT_S,
+                                  timeout_message=config_views.LOGIN_TIMEOUT_MESSAGE, hidden=(code,))
+    except JobBusy:
+        return refused_view(dbc.Alert("The previous login hasn't stopped yet, please try again in a minute.",
+                                      color="warning"))
+    return started_view(config_views.LOGIN_JOB, started, stored)
+
+
+poll_oauth = register_job_view(OAUTH_PREFIX, config_views.LOGIN_JOB, "finish-oauth", "oauth-result", render_oauth,
+                              config_views.LOGIN_LOST_MESSAGE)

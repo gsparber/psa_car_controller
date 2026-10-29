@@ -5,6 +5,16 @@ DEFAULT_MAX_FUEL_CONSUMPTION = 30
 
 
 class CarModel:
+    # the YAML loader doesn't call __init__: a field missing from car_models.yml falls back to these,
+    # the values of the "unknown" model
+    name = "unknown"
+    battery_power = DEFAULT_BATTERY_POWER
+    fuel_capacity = DEFAULT_FUEL_CAPACITY
+    abrp_name = None
+    reg = None
+    max_elec_consumption = DEFAULT_MAX_ELEC_CONSUMPTION
+    max_fuel_consumption = DEFAULT_MAX_FUEL_CONSUMPTION
+
     # pylint: disable=too-many-positional-arguments,too-many-arguments
     def __init__(self, name, battery_power, fuel_capacity, abrp_name=None, reg=None,
                  max_elec_consumption=DEFAULT_MAX_ELEC_CONSUMPTION, max_fuel_consumption=DEFAULT_MAX_FUEL_CONSUMPTION):
@@ -23,11 +33,10 @@ class CarModel:
 
 
 class ElecModel(CarModel):
+    fuel_capacity = 0
+    max_fuel_consumption = 0
+
     # pylint: disable=too-many-positional-arguments,too-many-arguments
     def __init__(self, name, battery_power, abrp_name=None, reg=None,
                  max_elec_consumption=DEFAULT_MAX_ELEC_CONSUMPTION):
         super().__init__(name, battery_power, 0, abrp_name, reg, max_elec_consumption, 0)
-
-    @property
-    def max_fuel_consumption(self):
-        return 0

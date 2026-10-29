@@ -7,21 +7,56 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import requests
-from dash import html
+from dash import html, no_update
 
 from psa_car_controller.common.sensitive_filter import MASK
 from psa_car_controller.psa.setup.headless_oauth import HeadlessOAuthError
 from psa_car_controller.psa.setup.worker_oauth import (CONNECT_TIMEOUT_S, WORKER_TIMEOUT_S, WorkerLoginError,
-                                                       get_oauth_code_from_worker, is_insecure_worker_url,
-                                                       worker_endpoint, worker_host)
+                                                       WorkerLoginRejected, get_oauth_code_from_worker,
+                                                       is_insecure_worker_url, worker_endpoint, worker_host)
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
-from tests.test_remote_command_api import get_api_view
+from tests.utils import get_web_view, isolate_jobs, wait_for_job
 
 AUTH_URL = "https://idpcvs.opel.com/am/oauth2/authorize?code_challenge=abc&redirect_uri=mymop%3A%2F%2Foauth2redirect"
 EMAIL = "someone@example.com"
 PASSWORD = "S3cret+Pass word"
 POST = "psa_car_controller.psa.setup.worker_oauth.requests.post"
 WORKER = "https://worker.example.com"
+
+# the answers of stelloauth's handleWorker and performChromedpOAuth, all HTTP 400 apart from the status given
+REJECTED_ANSWERS = (
+    (400, "authentication failed: Invalid login or password"),
+    (400, "authentication failed: Mot de passe incorrect"),
+    (400, "authentication failed: the account is locked"),  # text of the Stellantis error page
+    (400, "authentication failed - could not retrieve OAuth code"),
+    (400, "failed to submit login: context deadline exceeded"),  # the click may have gone through
+    (400, "something new"),
+    (401, "wrong password"),
+    (403, "account locked"),
+    (422, "bad credentials"),
+)
+NOT_REJECTED_ANSWERS = (
+    (400, "Invalid request body"),
+    (400, "Missing required params"),
+    (400, "invalid url: missing redirect_uri"),
+    (400, "service is busy, please try again in a few seconds"),
+    (400, "browser backend unavailable: querying CDP endpoint"),
+    (400, "failed to navigate: net::ERR_TIMED_OUT"),
+    (400, "login form not found (timeout): context deadline exceeded"),
+    (400, "failed to fill credentials: context deadline exceeded"),
+    (400, "the login took too long and the session expired, please try again"),
+    (400, None),
+    (404, "not found"),
+    (404, None),
+    (405, "Method not allowed"),
+    (408, "Request Timeout"),
+    (429, "Rate limit exceeded. Try again later."),
+    (500, "internal error"),
+    (502, None),
+    (503, "authentication failed: looks like a rejection but the service is down"),
+    (200, None),
+    (302, None),
+)
 
 
 def worker_answer(status, body):
@@ -82,6 +117,31 @@ class TestWorkerCall(unittest.TestCase):
     def test_429_is_reported_as_rate_limit(self, _):
         with self.assertRaisesRegex(WorkerLoginError, r"rate limit of the service.*Rate limit exceeded.*HTTP 429"):
             ask_worker()
+
+    def test_tried_credentials_are_a_rejection(self):
+        for status, message in REJECTED_ANSWERS:
+            with patch(POST, return_value=worker_answer(status, {"message": message, "code": status})), \
+                    self.assertRaises(WorkerLoginRejected, msg=message) as raised:
+                ask_worker()
+            self.assertIn(message, str(raised.exception))
+
+    def test_other_failures_are_no_rejection(self):
+        for status, message in NOT_REJECTED_ANSWERS:
+            body = {"message": message, "code": status} if message else {}
+            with patch(POST, return_value=worker_answer(status, body)), \
+                    self.assertRaises(WorkerLoginError, msg=(status, message)) as raised:
+                ask_worker()
+            self.assertNotIsInstance(raised.exception, WorkerLoginRejected, (status, message))
+
+    def test_rejection_masks_the_credentials(self):
+        message = f"authentication failed: wrong password {PASSWORD} for {EMAIL}"
+        with patch(POST, return_value=worker_answer(400, {"message": message})), \
+                self.assertRaises(WorkerLoginRejected) as raised:
+            ask_worker()
+        text = str(raised.exception)
+        self.assertNotIn(PASSWORD, text)
+        self.assertNotIn(EMAIL, text)
+        self.assertIn(MASK, text)
 
     def test_error_status_is_never_taken_for_a_code(self):
         for status, body in ((200, {"message": "no", "code": 400}), (500, {"code": "looks-like-a-code"}),
@@ -187,12 +247,15 @@ class TestAgainstHttpServer(unittest.TestCase):
         with self.assertRaisesRegex(WorkerLoginError, "rate limit.*HTTP 429"):
             ask_worker(self.url)
 
+    def test_rejection(self):
+        message = "authentication failed: Invalid login or password"
+        FakeWorker.answers = [(400, {"message": message, "code": 400})]
+        with self.assertRaisesRegex(WorkerLoginRejected, message + r" \(HTTP 400\)"):
+            ask_worker(self.url)
+
 
 def get_config_views():
-    get_api_view()  # sets the web app up
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        from psa_car_controller.web.view import config_views  # pylint: disable=import-outside-toplevel
-    return config_views
+    return get_web_view("config_views")
 
 
 def text_of(component):
@@ -209,6 +272,7 @@ def text_of(component):
 class TestLoginOrder(unittest.TestCase):
     def setUp(self):
         self.views = get_config_views()
+        isolate_jobs(self)
         self.setup = MagicMock()
         self.setup.psacc.manager.generate_redirect_url.return_value = AUTH_URL
         self.setup.psacc.manager.redirect_uri = "mymop://oauth2redirect"
@@ -226,7 +290,11 @@ class TestLoginOrder(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def login(self):
-        return self.views.connectPSA(1, "com.psa.mym.myopel", EMAIL, PASSWORD, "DE")
+        result, stored, *_ = self.views.connectPSA(1, "com.psa.mym.myopel", EMAIL, PASSWORD, "DE")
+        if stored is no_update:
+            return result
+        wait_for_job(self.views.LOGIN_JOB)
+        return self.views.poll_login(stored, 1)[5]
 
     def test_empty_url_goes_straight_to_the_browser(self):
         for url in (None, "", "   "):
@@ -244,8 +312,50 @@ class TestLoginOrder(unittest.TestCase):
         self.setup.connect.assert_called_once_with("worker-code")
         self.assertEqual("success", result.color)
 
+    def test_rejection_does_not_try_the_browser(self):
+        self.worker.side_effect = get_oauth_code_from_worker
+        for status, message in REJECTED_ANSWERS:
+            with patch(POST, return_value=worker_answer(status, {"message": message, "code": status})):
+                result = self.login()
+            self.headless.assert_not_called()
+            self.setup.connect.assert_not_called()
+            self.assertEqual("danger", result.color)
+            for expected in (message, "Go to login", "lock your account"):
+                self.assertIn(expected, text_of(result))
+
+    def test_rejection_shows_no_credentials(self):
+        self.worker.side_effect = get_oauth_code_from_worker
+        answer = worker_answer(400, {"message": f"authentication failed: {PASSWORD} for {EMAIL}"})
+        with patch(POST, return_value=answer), self.assertLogs(self.views.logger, logging.WARNING) as logs:
+            result = self.login()
+        for output in (text_of(result), "\n".join(logs.output)):
+            self.assertNotIn(PASSWORD, output)
+            self.assertNotIn(EMAIL, output)
+
+    def test_other_worker_failures_try_the_browser(self):
+        self.worker.side_effect = get_oauth_code_from_worker
+        self.headless.return_value = "browser-code"
+        for status, message in NOT_REJECTED_ANSWERS:
+            self.headless.reset_mock()
+            body = {"message": message, "code": status} if message else {}
+            with patch(POST, return_value=worker_answer(status, body)):
+                result = self.login()
+            self.headless.assert_called_once_with(AUTH_URL, EMAIL, PASSWORD, "mymop")
+            self.assertEqual("success", result.color, (status, message))
+
+    def test_timeout_and_network_error_try_the_browser(self):
+        self.worker.side_effect = get_oauth_code_from_worker
+        self.headless.return_value = "browser-code"
+        for error in (requests.exceptions.ReadTimeout(), requests.exceptions.ConnectTimeout(),
+                      requests.exceptions.ConnectionError()):
+            self.headless.reset_mock()
+            with patch(POST, side_effect=error):
+                result = self.login()
+            self.headless.assert_called_once_with(AUTH_URL, EMAIL, PASSWORD, "mymop")
+            self.assertEqual("success", result.color, error)
+
     def test_failing_worker_falls_back_to_the_browser(self):
-        for error in ("Login service w: invalid login (HTTP 400)", "Login service w: rate limit (HTTP 429)",
+        for error in ("Login service w: busy (HTTP 400)", "Login service w: rate limit (HTTP 429)",
                       "The login service w did not answer in time"):
             self.worker.side_effect = WorkerLoginError(error)
             self.headless.reset_mock()
@@ -316,7 +426,7 @@ class TestSettingsApi(unittest.TestCase):
     """GET /settings has no authentication: it must neither change nor give the URL the credentials go to."""
 
     def setUp(self):
-        api = get_api_view()
+        api = get_web_view("api")
         self.config = ConfigRepository(General={}, Electricity_config={}, Login_Worker={"url": WORKER})
         patcher = patch.object(api.APP, "config", self.config)
         patcher.start()

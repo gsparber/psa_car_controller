@@ -5,8 +5,21 @@ PSACC can ask a login service instead: [stelloauth](https://github.com/tamcore/s
 the same `POST /worker` API. PSACC only calls the service, it doesn't contain or start it.
 
 It is **off by default**. With a URL set, the login order is: login worker → local Playwright browser → manual link.
-When the worker fails, its message is shown and the next method takes over. A rate limit of the worker (HTTP 429) is
-reported as such.
+When the worker fails, its message is shown. A rate limit of the worker (HTTP 429) is reported as such.
+
+The local browser only takes over when the worker can't have tried your credentials or wasn't able to log in for
+another reason, because a second failed login could lock your account:
+
+| Answer of the worker | Next step |
+|---|---|
+| No answer in time, network error, HTTP 5xx, 429, 404, 405, 408 | local browser |
+| Answer without a `message` (e.g. the error page of a proxy), or without a code | local browser |
+| 4xx with a message saying the login form wasn't reached (bad request, service busy, browser backend unavailable, page or form not loading) | local browser |
+| 4xx saying the session expired | local browser |
+| Any other 4xx with a message, e.g. `authentication failed: ...` | **stop**, shows the message and the manual link |
+
+stelloauth answers HTTP 400 to all its failures, so the message decides. A message PSACC doesn't know counts as a
+rejection, even when the reason was something else (e.g. a captcha): try again or use the manual link.
 
 ## Security: your password goes to this service
 

@@ -16,6 +16,7 @@ from psa_car_controller.psacc.application import psa_client as psa_client_module
 from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.model.car import Car, Cars, EMPTY_STATUS_LIMIT
 from tests.data.car_status import ELECTRIC_CAR_STATUS
+from tests.utils import get_web_view
 
 VIN = "VR3UHZKXZLT000000"
 
@@ -149,7 +150,7 @@ class TestKeepStatusOnErrors(unittest.TestCase):
 class TestOutdatedStatusHeader(unittest.TestCase):
 
     def test_the_api_says_the_status_is_outdated(self):
-        from psa_car_controller.web.view import api as api_view  # pylint: disable=import-outside-toplevel
+        api_view = get_web_view("api")
         client = get_client(get_status("2022-03-26T11:02:54Z"), *[api_error(503)] * (2 * EMPTY_STATUS_LIMIT))
         client.get_vehicle_info(VIN)
         for _ in range(EMPTY_STATUS_LIMIT - 1):

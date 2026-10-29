@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from psa_car_controller.psacc.application.vehicle_picture import VehiclePicture
-from psa_car_controller.psa import precond_programs
+from psa_car_controller.psa import RemoteClient, precond_programs
 from psa_car_controller.web.view import insights_data
+from tests.utils import get_web_view
 
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc)
 
@@ -113,7 +114,7 @@ if __name__ == "__main__":
 
 class TestLog(unittest.TestCase):
     def test_parse_and_filter(self):
-        from psa_car_controller.web.view import log  # pylint: disable=import-outside-toplevel
+        log = get_web_view("log")
         entries = log.parse("2026-10-29 17:08:23,614 :: INFO :: database initialized !\n"
                             "2026-10-29 17:08:24,001 :: ERROR :: Failed to record SOH\n"
                             "Traceback (most recent call last):\n"
@@ -126,7 +127,7 @@ class TestLog(unittest.TestCase):
         self.assertEqual(3, len(log.filter_level(entries, "debug")))
 
     def test_read_tail_drops_cut_line(self):
-        from psa_car_controller.web.view import log  # pylint: disable=import-outside-toplevel
+        log = get_web_view("log")
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".log") as f:
             f.write("first line that gets cut\nsecond\nthird\n")
         try:
@@ -143,3 +144,71 @@ class TestLegacyPagePath(unittest.TestCase):
         self.assertEqual("/_dash-layout", legacy_page_path("/v1/_dash-layout"))
         self.assertEqual("/assets/pwa.js", legacy_page_path("/v1/assets/pwa.js"))
         self.assertEqual("/charge", legacy_page_path("/charge"))
+
+
+class TestSettingsRemoteState(unittest.TestCase):
+    def remote_state(self, token_error, connected=True):
+        settings = get_web_view("settings")
+        controller = MagicMock(remote_control=True)
+        controller.myp.remote_client.token_error = token_error
+        controller.myp.remote_client.mqtt_client.is_connected.return_value = connected
+        with patch.object(settings, "app", return_value=controller):
+            return settings.remote_state()
+
+    def test_connected(self):
+        settings = get_web_view("settings")
+        self.assertEqual(settings.REMOTE_OK, self.remote_state(None))
+
+    def test_connected_socket_but_token_failed(self):
+        # the mqtt socket stays open while every publish fails on the token
+        settings = get_web_view("settings")
+        self.assertEqual(settings.REMOTE_ERROR, self.remote_state(RemoteClient.TOKEN_REMOTE_FAILED))
+
+    def test_rate_limited_is_paused(self):
+        settings = get_web_view("settings")
+        self.assertEqual(settings.REMOTE_PAUSED, self.remote_state(RemoteClient.TOKEN_RATE_LIMITED))
+
+    def test_rejected_login_shows_up_as_the_login_problem_only(self):
+        # is_good stays True when PSA rejects the login after the start: the account row said "Connected"
+        # in green next to a red remote row, and the login form was nowhere
+        settings = get_web_view("settings")
+        controller = MagicMock(remote_control=True, is_good=True)
+        controller.myp.manager.needs_login = True
+        with patch.object(settings, "app", return_value=controller):
+            self.assertEqual([settings.LOGIN_FAILED, None, None], settings.current_state())
+        controller.myp.manager.needs_login = False
+        controller.myp.remote_client.token_error = None
+        with patch.object(settings, "app", return_value=controller):
+            self.assertEqual(settings.LOGGED_IN, settings.account_state())
+
+    def render_remote(self, state, error=None):
+        settings = get_web_view("settings")
+        return str(settings._remote(state, error))  # pylint: disable=protected-access
+
+    def test_account_failure_offers_no_new_otp(self):
+        settings = get_web_view("settings")
+        shown = self.render_remote(settings.REMOTE_ERROR, RemoteClient.TOKEN_ACCOUNT_FAILED)
+        self.assertIn("account token", shown)
+        self.assertIn(settings.RECONNECT, shown)
+        self.assertNotIn("SMS", shown)
+        self.assertNotIn("finish-otp", shown)
+
+    def test_remote_failure_offers_reconnect_before_a_new_otp(self):
+        settings = get_web_view("settings")
+        shown = self.render_remote(settings.REMOTE_ERROR, RemoteClient.TOKEN_REMOTE_FAILED)
+        self.assertIn("If reconnecting doesn't help", shown)
+        self.assertIn(settings.RECONNECT, shown)
+        self.assertIn("SMS", shown)
+
+    def test_paused_offers_nothing_to_click(self):
+        settings = get_web_view("settings")
+        shown = self.render_remote(settings.REMOTE_PAUSED)
+        self.assertIn("Paused", shown)
+        self.assertNotIn(settings.RECONNECT, shown)
+        self.assertNotIn("SMS", shown)
+
+    def test_refused_by_the_broker_keeps_the_generic_text(self):
+        # the broker refusing the credentials isn't a failed refresh: mqtt_auth_failures counts it, not token_error
+        settings = get_web_view("settings")
+        self.assertEqual(settings.REMOTE_ERROR, self.remote_state(None, connected=False))
+        self.assertIn("Can't reach the PSA remote server", self.render_remote(settings.REMOTE_ERROR, None))

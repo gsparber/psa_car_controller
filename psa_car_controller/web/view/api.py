@@ -14,7 +14,7 @@ from psa_car_controller.common.utils import AuthenticationRequiredException, Rat
 from urllib3.exceptions import HTTPError
 
 from psa_car_controller.psa.RemoteClient import RemoteException
-from psa_car_controller.psa.oauth import rejected_grant_hint
+from psa_car_controller.psa.oauth import refresh_can_recover, rejected_grant_hint
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.application.vehicle_services import MAX_TRIPS_PAGES, UNSUPPORTED_STATUSES
 from psa_car_controller.psacc.application.car_controller import PSACarController
@@ -79,10 +79,11 @@ def handle_authentication_required(error):
 def handle_oauth_error(error):
     """An expired or revoked grant needs a new login, not a retry."""
     logger.error("API call rejected, OAuth error: %s", error)
-    return jsonify({
-        "error": "authentication_required",
-        "message": f"OAuth error, please reconnect from the config web page: {error}.{rejected_grant_hint(error)}",
-    }), 503
+    if refresh_can_recover(error):
+        message = f"OAuth error, the login is kept, please try again later: {error}."
+    else:
+        message = f"OAuth error, please reconnect from the config web page: {error}.{rejected_grant_hint(error)}"
+    return jsonify({"error": "authentication_required", "message": message}), 503
 
 
 @app.route('/health')

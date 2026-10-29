@@ -1,19 +1,23 @@
 """Access token refresh: once per rejected token, retried after a 401, scheduled before it expires."""
+import json
 import threading
 import time
 import unittest
 from http import HTTPStatus
-from unittest.mock import MagicMock, patch
+from unittest.mock import DEFAULT, MagicMock, patch
 
 from oauth2_client.credentials_manager import OAuthError, ServiceInformation
-from requests import RequestException
+from requests import RequestException, Response
 
 from psa_car_controller.common.utils import RateLimitException
+from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psa.oauth import (OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient,
                                           REFRESH_BEFORE_EXPIRY, REFRESH_RETRY_DELAYS, REFRESH_RETRY_JITTER,
                                           refresh_retry_delay)
 from psa_car_controller.psacc.application.psa_client import PSAClient
+
+from tests.utils import get_rc
 
 
 def get_manager() -> OpenIdCredentialManager:
@@ -253,6 +257,162 @@ class TestScheduledRefresh(unittest.TestCase):
             self.timers[-1].function()
         self.assertEqual(2, len(self.timers))
         self.assertAlmostEqual(1800 - REFRESH_BEFORE_EXPIRY, self.timers[-1].delay, delta=5)
+
+
+def answer(status: int, body: dict) -> Response:
+    response = Response()
+    response.status_code = status
+    response._content = json.dumps(body).encode()
+    return response
+
+
+def fake_api(manager: OpenIdCredentialManager, before_answer=None) -> list:
+    """Answer POSTs like PSA: 401 to the old access token. Returns the tokens sent, in order."""
+    session = manager._get_session()
+    sent = []
+
+    def post(_url, **_kwargs):
+        token = session.headers["Authorization"][len("Bearer "):]
+        sent.append(token)
+        if token != "old-access-token":
+            return answer(200, {})
+        if before_answer:
+            before_answer()
+        return answer(401, {"moreInformation": "Token is invalid"})
+    session.post = post
+    return sent
+
+
+class TestRefreshInsideARequest(unittest.TestCase):
+    """manager.get/post refresh on a 401 too: same lock, rejected token and rate limit as the others."""
+
+    def test_concurrent_requests_refresh_once(self):
+        manager = get_manager()
+        both_rejected = threading.Barrier(2)
+        sent = fake_api(manager, lambda: both_rejected.wait(5))
+
+        def slow_refresh():
+            time.sleep(0.2)
+            new_tokens(manager)()
+
+        results = []
+        with unlimited(manager), patch.object(manager, "_refresh_token", side_effect=slow_refresh) as refresh:
+            threads = [threading.Thread(target=lambda: results.append(manager.post("https://api.invalid/token")))
+                       for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        refresh.assert_called_once()
+        self.assertEqual([200, 200], [response.status_code for response in results])
+        self.assertEqual(["new-access-token"] * 2, sent[2:])
+
+    def test_a_token_replaced_meanwhile_is_not_refreshed_again(self):
+        manager = get_manager()
+        sent = fake_api(manager, lambda: setattr(manager, "_access_token", "new-access-token"))
+        with unlimited(manager), patch.object(manager, "_refresh_token") as refresh:
+            self.assertEqual(200, manager.post("https://api.invalid/token").status_code)
+        refresh.assert_not_called()
+        self.assertEqual(["old-access-token", "new-access-token"], sent)
+
+    def test_a_rejected_refresh_token_is_not_sent_again(self):
+        manager = get_manager()
+        sent = fake_api(manager)
+        rejection = answer(400, {"error": "invalid_grant", "error_description": "grant is invalid"})
+        with unlimited(manager), patch("oauth2_client.credentials_manager.requests.post",
+                                       return_value=rejection) as token_endpoint:
+            self.assertFalse(manager.refresh_token_now())
+            with self.assertRaises(OAuthError) as raised:
+                manager.post("https://api.invalid/token")
+        token_endpoint.assert_called_once()
+        self.assertEqual("invalid_grant", raised.exception.error)
+        self.assertEqual(["old-access-token"], sent)
+
+    def test_a_refusal_during_the_request_is_remembered(self):
+        manager = get_manager()
+        fake_api(manager)
+        with unlimited(manager), patch.object(manager, "_refresh_token", side_effect=invalid_grant()) as refresh:
+            for _ in range(2):
+                with self.assertRaises(OAuthError):
+                    manager.post("https://api.invalid/token")
+        refresh.assert_called_once()
+        self.assertTrue(manager.needs_login)
+        self.assertEqual("refresh-token", manager.rejected_refresh_token)
+
+    def test_the_rate_limit_applies(self):
+        manager = get_manager()
+        sent = fake_api(manager)
+        with patch.object(manager, "_refresh_with_retries", side_effect=RateLimitException("refresh")), \
+                patch.object(manager, "_refresh_token") as refresh, \
+                self.assertRaises(RateLimitException):
+            manager.post("https://api.invalid/token")
+        refresh.assert_not_called()
+        self.assertEqual(["old-access-token"], sent)
+
+    def test_an_unreachable_token_endpoint_is_reported(self):
+        manager = get_manager()
+        fake_api(manager)
+        with unlimited(manager), patch.object(manager, "_refresh_token", side_effect=RequestException("down")), \
+                patch("psa_car_controller.psa.oauth.time.sleep"), self.assertRaises(RequestException):
+            manager.post("https://api.invalid/token")
+        self.assertFalse(manager.needs_login)
+
+    def test_rotated_tokens_are_kept(self):
+        manager = get_manager()
+        sent = fake_api(manager)
+        saved = []
+        manager.refresh_callbacks.append(lambda: saved.append(manager.refresh_token))
+        tokens = answer(200, {"access_token": "new-access-token", "refresh_token": "new-refresh-token"})
+        with unlimited(manager), patch("oauth2_client.credentials_manager.requests.post", return_value=tokens):
+            self.assertEqual(200, manager.post("https://api.invalid/token").status_code)
+        self.assertEqual("new-refresh-token", manager.refresh_token)
+        self.assertEqual(["new-refresh-token"], saved)
+        self.assertEqual(["old-access-token", "new-access-token"], sent)
+
+    def test_a_request_from_a_refresh_callback_doesnt_deadlock(self):
+        manager = get_manager()
+        fake_api(manager)
+        errors = []
+
+        def request_during_refresh():
+            try:
+                manager.post("https://api.invalid/token")
+            except OAuthError as e:
+                errors.append(e)
+        manager.refresh_callbacks.append(request_during_refresh)
+
+        def refresh():  # PSA still refuses the token the callback sends
+            manager.refresh_token = "new-refresh-token"
+
+        with unlimited(manager), patch.object(manager, "_refresh_token", side_effect=refresh) as refresh_token:
+            thread = threading.Thread(target=manager.refresh_token_now, daemon=True)
+            thread.start()
+            thread.join(5)
+        self.assertFalse(thread.is_alive(), "deadlock")
+        refresh_token.assert_called_once()
+        self.assertEqual(1, len(errors))
+
+    def test_other_answers_dont_refresh(self):
+        manager = get_manager()
+        manager._get_session().post = lambda _url, **_kwargs: answer(401, {"moreInformation": "Something else"})
+        with unlimited(manager), patch.object(manager, "_refresh_token") as refresh:
+            self.assertEqual(401, manager.post("https://api.invalid/token").status_code)
+        refresh.assert_not_called()
+
+    def test_remote_token_refresh_doesnt_use_an_otp_when_the_grant_is_rejected(self):
+        manager = get_manager()
+        fake_api(manager)
+        remote_client = get_rc()
+        remote_client.manager = manager
+        remote_client.remoteCredentials = RemoteCredentials("remote-refresh-token")
+        remote_client.mqtt_client = MagicMock()
+        remote_client.otp = MagicMock()
+        # the access token was refused between the regular refresh and the remote token request
+        with unlimited(manager), patch.object(manager, "_refresh_token", side_effect=invalid_grant()), \
+                patch.object(manager, "refresh_token_now", wraps=manager.refresh_token_now) as refresh_now:
+            refresh_now.side_effect = [True, DEFAULT]
+            self.assertFalse(remote_client._refresh_remote_token(force=True))
+        remote_client.otp.get_otp_code.assert_not_called()
 
 
 if __name__ == '__main__':

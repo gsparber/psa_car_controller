@@ -8,17 +8,14 @@ from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
 from psa_car_controller.web import figures, units
 from psa_car_controller.web.view import status_text
-from tests.test_remote_command_ui import get_car_access
+from tests.utils import get_web_view
 
 TRIP = {"id": 1, "distance": 100.0, "mileage": 16093.44, "speed_average": 80.4672, "consumption_km": 16.0,
         "consumption_fuel_km": 5.0, "consumption": 16.0, "duration": 75, "altitude_diff": 12}
 
 
 def _view(name):
-    """Pages register Dash callbacks on import, so the Dash app has to exist first."""
-    get_car_access()
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        return __import__(f"psa_car_controller.web.view.{name}", fromlist=[name])
+    return get_web_view(name)
 
 
 def _suffix(column):

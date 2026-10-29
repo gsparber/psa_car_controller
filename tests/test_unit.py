@@ -1,11 +1,18 @@
 # flake8: noqa
+import bz2
+import contextlib
 import json
 import os
+import shutil
+import tempfile
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import reverse_geocode
+import ruamel.yaml
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.x509 import load_pem_x509_certificate
 from dateutil.tz import tzutc
 from greenery.lego import parse, charclass
 from pytz import UTC
@@ -17,6 +24,7 @@ from psa_car_controller.common.mylogger import my_logger
 from psa_car_controller.common.utils import parse_hour, RateLimitException, rate_limit, \
     validate_preconditioning_programs
 from psa_car_controller.psa.otp.otp import load_otp, save_otp
+from psa_car_controller.psa.setup.apk_parser import ApkParser
 from psa_car_controller.psa.setup.app_decoder import get_content_from_apk, GITHUB_USER, GITHUB_REPO
 from psa_car_controller.psa.setup.github import github_file_need_to_be_downloaded
 from psa_car_controller.psa.connected_car_api import ApiClient
@@ -25,6 +33,8 @@ from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.application.ecomix import Ecomix
 from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.model.car import Car, Cars
+from psa_car_controller.psacc.model.car_model import CarModel, ElecModel
+from psa_car_controller.psacc.model.trip import Trip
 from psa_car_controller.psacc.repository import config_repository
 from psa_car_controller.psacc.repository.car_model import CarModelRepository
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
@@ -32,10 +42,12 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.repository.trips import Trips
 from psa_car_controller.psacc.utils.utils import get_temp
 from tests.data.car_status import FUEL_CAR_STATUS, ELECTRIC_CAR_STATUS, ELECTRIC_CAR_STATUS_V2
+from tests.github_fixture import FakeApk, FakeGithub, build_apk_archive
 from tests.utils import DATA_DIR, record_position, latitude, longitude, date0, date1, date2, date3, record_charging, \
     vehicule_list, get_new_test_db, get_date, date4, compare_dict, duration_min, duration_str
 from psa_car_controller.web.figures import get_figures, get_battery_curve_fig, get_altitude_fig
 
+REAL_APK_ARCHIVE = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "mypeugeot.apk.bz2")
 dummy_value = 0
 
 
@@ -96,6 +108,217 @@ class TestUnit(unittest.TestCase):
         assert model.battery_power == 73
         assert CarModelRepository().find_model_by_name("E-3008 GT").reg == "VR3KCZKZXT"
 
+    def test_car_model_former_regex_entries(self):
+        expected = {
+            "VF3CCHMRPJ": ("208(2017-2019)", 0, 44),
+            "VR3ENZKUXR": ("E-Partner 50 kWh (2024)", 50, 0),
+            "VF7VEAHXKL": ("Spacetourer Vanster 2021", 0, 70),
+            "VR3KCZKZ4R": ("e-5008 Single Motor 73 kWh", 73, 0),
+        }
+        for prefix, (name, battery_power, fuel_capacity) in expected.items():
+            car = Car(prefix + "1234567", "vehicle_id", "brand")
+            self.assertEqual(car.label, name)
+            self.assertEqual(car.battery_power, battery_power)
+            self.assertEqual(car.fuel_capacity, fuel_capacity)
+            self.assertGreater(car.max_elec_consumption, 0)
+            self.assertIsNotNone(car.max_fuel_consumption)
+
+    def test_car_model_reg_is_a_plain_prefix(self):
+        for model in CarModelRepository().models:
+            self.assertRegex(model.reg, r"^[A-Z0-9]+$", f"{model.name}: reg is compared with startswith, not as a regex")
+
+    def test_every_car_model_creates_a_car(self):
+        for model in CarModelRepository().models:
+            with self.subTest(model=model.name, reg=model.reg):
+                car = Car(model.reg.ljust(17, "0"), "vehicle_id", "brand")
+                self.assertEqual(car.label, model.name)
+                self.assertEqual(car.battery_power, model.battery_power)
+                self.assertEqual(car.fuel_capacity, model.fuel_capacity)
+                self.assertIsNotNone(car.max_elec_consumption)
+                self.assertIsNotNone(car.max_fuel_consumption)
+
+    def test_car_model_identity_fields_are_explicit(self):
+        # the defaults keep the app running, but a guessed battery or tank size would give wrong statistics
+        for model in CarModelRepository().models:
+            for field in ("name", "reg", "battery_power", "fuel_capacity"):
+                self.assertIn(field, vars(model), f"{model.name}: {field} missing in car_models.yml")
+
+    def test_car_model_without_limits_uses_unknown_model_defaults(self):
+        expected = {
+            "VR7BAHNSBP": (70, 30),  # thermal
+            "VR3F3DGY2R": (70, 30),  # hybrid
+            "VR3FMZKW3R": (70, 0),  # ElecModel
+            "VR3FNZKW4R": (70, 30),  # electric, but a CarModel entry
+        }
+        for prefix, limits in expected.items():
+            car = Car(prefix + "1234567", "vehicle_id", "brand")
+            self.assertEqual((car.max_elec_consumption, car.max_fuel_consumption), limits, car.label)
+
+    def test_car_model_yaml_entry_with_only_a_name(self):
+        yaml = ruamel.yaml.YAML()
+        yaml.register_class(ElecModel)
+        yaml.register_class(CarModel)
+        thermal, electric = yaml.load("- !CarModel\n  name: a\n- !ElecModel\n  name: b\n")
+        self.assertFalse(thermal.match("VIN"))
+        for model, max_fuel, fuel_capacity in ((thermal, 30, 0), (electric, 0, 0)):
+            with patch.object(CarModelRepository, "find_model_by_vin", return_value=model):
+                car = Car("VIN", "vehicle_id", "brand")
+            self.assertEqual(car.label, model.name)
+            self.assertEqual(car.battery_power, 46)
+            self.assertEqual(car.fuel_capacity, fuel_capacity)
+            self.assertIsNone(car.abrp_name)
+            self.assertEqual((car.max_elec_consumption, car.max_fuel_consumption), (70, max_fuel))
+
+    def test_elec_model_constructor(self):
+        model = ElecModel("name", 40)
+        self.assertEqual((model.max_elec_consumption, model.max_fuel_consumption), (70, 0))
+
+    def test_load_cars_json_of_a_model_without_limits(self):
+        base = {"vin": "VR7BAHNSBP1234567", "vehicle_id": "id", "brand": "C", "label": "C4 Shine 2023"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for stored, limits in (({}, (70, 30)),
+                                   ({"max_elec_consumption": 0, "max_fuel_consumption": 0}, (70, 30)),
+                                   ({"max_elec_consumption": None, "max_fuel_consumption": None}, (70, 30)),
+                                   ({"max_elec_consumption": 55, "max_fuel_consumption": 12}, (55, 12))):
+                with self.subTest(stored=stored):
+                    with open(path, "w", encoding="utf-8") as file:
+                        json.dump([{**base, **stored}], file)
+                    car = Cars.load_cars(path)[0]
+                    self.assertEqual((car.max_elec_consumption, car.max_fuel_consumption), limits)
+
+    UNKNOWN_CAR = {"vin": "VR7BAHNSBP1234567", "vehicle_id": "id", "brand": "C", "label": "unknown", "abrp_name": None,
+                   "battery_power": 46, "fuel_capacity": 0, "max_elec_consumption": 70, "max_fuel_consumption": 30,
+                   "precond_programs": {"program1": {}}}
+    CAR_VALUES = ("label", "abrp_name", "battery_power", "fuel_capacity", "max_elec_consumption",
+                  "max_fuel_consumption")
+
+    @staticmethod
+    def _load_cars_json(path, **stored):
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump([{**TestUnit.UNKNOWN_CAR, **stored}], file)
+        return Cars.load_cars(path)[0]
+
+    def _car_values(self, car):
+        return tuple(getattr(car, field) for field in self.CAR_VALUES)
+
+    def test_cars_json_of_unknown_model_gets_the_recognized_model(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for vin, label, expected in (
+                    ("VR7BAHNSBP1234567", "unknown", ("C4 Shine 2023", None, 0, 50, 70, 30)),
+                    ("VR3F3DGY2R1234567", "unknown", ("408 GT Hybrid 225", None, 12.4, 40, 70, 30)),
+                    ("VR3KCZKZ8R1234567", "unknown", ("e-5008", "peugeot:e5008:25:77", 73, 0, 70, 0)),
+                    # short_label of the app replaced "unknown" in app_decoder
+                    ("VR7BAHNSBP1234567", "C4", ("C4 Shine 2023", None, 0, 50, 70, 30)),
+                    ("VR7BAHNSBP1234567", None, ("C4 Shine 2023", None, 0, 50, 70, 30))):
+                with self.subTest(vin=vin, label=label):
+                    with self.assertLogs(logger_name, level="INFO") as logs:
+                        car = self._load_cars_json(path, vin=vin, label=label)
+                    self.assertEqual(self._car_values(car), expected)
+                    self.assertEqual(car.precond_programs, {"program1": {}})
+                    self.assertEqual(len(logs.records), 1)
+                    self.assertEqual(logs.records[0].levelname, "INFO")
+                    self.assertNotIn(vin, logs.output[0])
+                    self.assertIn("***" + vin[-4:], logs.output[0])
+                    with open(path, encoding="utf-8") as file:
+                        saved = json.load(file)[0]
+                    self.assertEqual(tuple(saved[field] for field in self.CAR_VALUES), expected)
+                    # second start: nothing to correct, no log, nothing changes
+                    with self.assertNoLogs(logger_name, level="INFO"):
+                        again = Cars.load_cars(path)[0]
+                    self.assertEqual(self._car_values(again), expected)
+
+    def test_cars_json_correction_is_stable_for_every_model(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for model in CarModelRepository().models:
+                with self.subTest(model=model.name, reg=model.reg):
+                    vin = model.reg.ljust(17, "0")
+                    car = self._load_cars_json(path, vin=vin)
+                    self.assertEqual((car.battery_power, car.fuel_capacity), (model.battery_power, model.fuel_capacity))
+                    self.assertEqual((car.max_elec_consumption, car.max_fuel_consumption),
+                                     (model.max_elec_consumption, model.max_fuel_consumption))
+                    with self.assertNoLogs(logger_name, level="INFO"):
+                        again = Cars.load_cars(path)[0]
+                    # abrp_name: a missing one is filled from the first model with that name, also without correction
+                    self.assertEqual(self._car_values(again)[2:], self._car_values(car)[2:])
+                    self.assertEqual(again.label, car.label)
+
+    def test_cars_json_with_user_values_is_not_changed(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for stored, values in (
+                    # one value that isn't from the unknown model is enough, the label is still replaced as before
+                    ({"battery_power": 50}, ("C4 Shine 2023", None, 50, 50, 70, 30)),
+                    ({"fuel_capacity": 45}, ("C4 Shine 2023", None, 46, 45, 70, 30)),
+                    ({"max_elec_consumption": 55}, ("C4 Shine 2023", None, 46, 50, 55, 30)),
+                    ({"max_fuel_consumption": 12}, ("C4 Shine 2023", None, 46, 50, 70, 12))):
+                with self.subTest(stored=stored):
+                    with self.assertNoLogs(logger_name, level="INFO"):
+                        car = self._load_cars_json(path, **stored)
+                    self.assertEqual(self._car_values(car), values)
+
+    def test_cars_json_of_still_unknown_or_same_values_is_not_changed(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            with self.assertNoLogs(logger_name, level="INFO"):
+                car = self._load_cars_json(path, vin="ZZZZZZZZZZ1234567")
+            self.assertEqual(self._car_values(car), ("unknown", None, 46, 0, 70, 30))
+            with patch.object(CarModelRepository(), "models",
+                              [CarModel("same", 46, 0, reg="VR7BAHNSBP", abrp_name="code")]):
+                with self.assertNoLogs(logger_name, level="INFO"):
+                    car = self._load_cars_json(path)
+            self.assertEqual(self._car_values(car), ("same", "code", 46, 0, 70, 30))
+
+    def test_cars_json_with_ambiguous_values_only_warns(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for vin, stored, values in (
+                    # label replaced by a previous start, the tank came from the model
+                    ("VR7BAHNSBP1234567", {"label": "C4 Shine 2023", "fuel_capacity": 50},
+                     ("C4 Shine 2023", None, 46, 50, 70, 30)),
+                    ("VR3KCZKZ8R1234567", {"label": "e-5008", "abrp_name": "peugeot:e5008:25:77"},
+                     ("e-5008", "peugeot:e5008:25:77", 46, 0, 70, 30)),
+                    # abrp_name set by hand, as docs/abrp.md describes
+                    ("VR3KCZKZ8R1234567", {"abrp_name": "own"}, ("e-5008", "own", 46, 0, 70, 30))):
+                with self.subTest(stored=stored):
+                    with self.assertLogs(logger_name, level="INFO") as logs:
+                        car = self._load_cars_json(path, vin=vin, **stored)
+                    self.assertEqual(self._car_values(car), values)
+                    self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+                    self.assertNotIn(vin, logs.output[0])
+                    self.assertIn("***" + vin[-4:], logs.output[0])
+
+    def test_cars_json_with_another_chosen_model_is_not_changed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            with self.assertNoLogs("psa_car_controller.psacc.model.car", level="INFO"):
+                car = self._load_cars_json(path, label="408 GT Hybrid 225", fuel_capacity=40)
+            self.assertEqual((car.label, car.battery_power, car.fuel_capacity), ("408 GT Hybrid 225", 46, 40))
+
+    def test_default_limits_only_discard_outlier_trips(self):
+        def is_kept(car, consumption_km=0, consumption_fuel_km=0):
+            trip = Trip()
+            trip.car = car
+            trip.speed_average = 50
+            trip.consumption_km = consumption_km
+            trip.consumption_fuel_km = consumption_fuel_km
+            return Trips().check_and_append(trip)
+
+        electric = Car("VR3FMZKW3R1234567", "vehicle_id", "brand")
+        thermal = Car("VR7BAHNSBP1234567", "vehicle_id", "brand")
+        self.assertTrue(is_kept(electric, consumption_km=35))
+        self.assertTrue(is_kept(electric, consumption_km=70))
+        self.assertFalse(is_kept(electric, consumption_km=71))
+        self.assertTrue(is_kept(thermal, consumption_fuel_km=15))
+        self.assertFalse(is_kept(thermal, consumption_fuel_km=31))
+
     def test_c02_signal_cache(self):
         start = datetime.utcnow().replace(tzinfo=UTC) - timedelta(minutes=30)
         end = datetime.utcnow().replace(tzinfo=UTC)
@@ -117,9 +340,10 @@ class TestUnit(unittest.TestCase):
             self.assertIsInstance(res, (int, float))
 
     def test_charge_control(self):
-        charge_control = ChargeControls()
-        charge_control.file_name = "test_charge_control.json"
-        charge_control.save_config(force=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            charge_control = ChargeControls()
+            charge_control.file_name = os.path.join(tmp, "test_charge_control.json")
+            charge_control.save_config(force=True)
 
     def test_battery_curve(self):
         vin = self.vehicule_list[0].vin
@@ -247,10 +471,17 @@ class TestUnit(unittest.TestCase):
         Charging.record_charging(car, "InProgress", date1, 70, latitude, longitude, "FR", "slow", 20, 60, mileage)
         Charging.record_charging(car, "InProgress", date1, 70, latitude, longitude, "FR", "slow", 20, 60, mileage)
         Charging.record_charging(car, "InProgress", date2, 80, latitude, longitude, "FR", "slow", 20, 60, mileage)
-        Charging.record_charging(car, "Stopped", date3, end_level, latitude, longitude, "FR", "slow", 20, 60, mileage)
+        # periods of a quarter of an hour, from 11:00 to 12:00
+        eco2mix = MagicMock(text="<liste>" + "".join(f'<valeur periode="{period}">{period - 4}</valeur>'
+                                                     for period in range(40, 52)) + "</liste>")
+        with patch("requests.get", return_value=eco2mix) as get:
+            Charging.record_charging(car, "Stopped", date3, end_level, latitude, longitude, "FR", "slow", 20, 60,
+                                     mileage)
+        self.assertIn("eco2mix.rte-france.com", get.call_args.args[0])
         chargings = Charging.get_chargings()
         co2 = chargings[0]["co2"]
         assert isinstance(co2, float)
+        self.assertEqual(41.5, co2)
         assert compare_dict(chargings, [{'start_at': date0,
                                          'stop_at': date3,
                                          'duration_str': duration_str,
@@ -368,18 +599,69 @@ class TestUnit(unittest.TestCase):
 
     def test_parse_apk(self):
         filename = "mypeugeot.apk"
-        try:
-            os.remove(filename)
-        except FileNotFoundError:
-            pass
-        assert get_content_from_apk(filename, "FR")
-        assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename + ".bz2") is False
+        github = FakeGithub({filename + ".bz2": build_apk_archive()})
+        # the apk, its archive and certs/ end up in the working directory
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), \
+                patch("requests.get", side_effect=github.get), \
+                patch("psa_car_controller.psa.setup.apk_parser.APK", FakeApk):
+            apk_parser = get_content_from_apk(filename, "FR")
+            self.assertEqual("https://brandid.example", apk_parser.host_brandid_prod)
+            self.assertEqual("fr_FR", apk_parser.culture)
+            self.assertEqual("client-id", apk_parser.client_id)
+            self.assertEqual("client-secret", apk_parser.client_secret)
+            self.assertEqual("AP_FR_ESP", apk_parser.site_code)
+            self.assertEqual("1.2.3", apk_parser.version)
+            with open("certs/private.pem", "rb") as f:
+                self.assertIsNotNone(load_pem_private_key(f.read(), None))
+            with open("certs/public.pem", "rb") as f:
+                self.assertIsNotNone(load_pem_x509_certificate(f.read()))
+            assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename + ".bz2") is False
+
+    def test_parse_real_apk(self):
+        """FakeApk replaces androguard everywhere else: this one reads the format of the real application.
+
+        The archive weighs 31 MB and holds the credentials of the application, so it isn't part of the repository.
+        It's the file github.com/flobz/psa_apk publishes, read from PSACC_TEST_APK or the root of the repository.
+        """
+        archive = os.environ.get("PSACC_TEST_APK", REAL_APK_ARCHIVE)
+        if not os.path.isfile(archive):
+            self.skipTest(f"real apk not available: {archive}")
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            with bz2.open(archive, "rb") as compressed, open("mypeugeot.apk", "wb") as apk:
+                shutil.copyfileobj(compressed, apk)
+            apk_parser = ApkParser("mypeugeot.apk", "FR")
+            apk_parser.retrieve_content_from_apk()
+            self.assertRegex(apk_parser.host_brandid_prod, "^https?://")
+            self.assertRegex(apk_parser.culture, "^[a-z]{2}_[A-Z]{2}$")
+            self.assertEqual("AP_FR_ESP", apk_parser.site_code)
+            for value in (apk_parser.client_id, apk_parser.client_secret, apk_parser.version):
+                self.assertIsInstance(value, str)
+                self.assertTrue(value)
+            with open("certs/private.pem", "rb") as f:
+                self.assertIsNotNone(load_pem_private_key(f.read(), None))
+            with open("certs/public.pem", "rb") as f:
+                self.assertIsNotNone(load_pem_x509_certificate(f.read()))
+
+    def test_parse_apk_online(self):
+        if not self.test_online:
+            self.skipTest("set TEST_ONLINE=1 to use github.com/flobz/psa_apk")
+        filename = "mypeugeot.apk"
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
+            assert get_content_from_apk(filename, "FR")
+            assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename + ".bz2") is False
 
     def test_file_need_to_be_updated(self):
         filename = "mypeugeot.apk.bz2"
-        with open(filename, "w") as f:
-            f.write(" ")
-        assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename) is True
+        github = FakeGithub({filename: b"the content published on github"})
+        with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp), \
+                patch("requests.get", side_effect=github.get):
+            with open(filename, "w") as f:
+                f.write(" ")
+            assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename) is True
+            # same content as on github: nothing to download
+            with open(filename, "wb") as f:
+                f.write(b"the content published on github")
+            assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename) is False
 
     def test_validate_preconditioning_programs(self):
         valid = {

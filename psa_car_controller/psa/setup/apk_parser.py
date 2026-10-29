@@ -2,7 +2,7 @@ import json
 import os
 import sys
 
-from androguard.core.apk import APK
+from androguard.core.apk import APK, FileNotPresent
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -12,6 +12,10 @@ from psa_car_controller.psa.constants import BRAND
 from androguard.core.axml import logger as androguard_logger
 androguard_logger.remove()
 androguard_logger.add(sys.stderr, level="ERROR")
+
+
+class UnknownCountryError(ValueError):
+    """The APK of the brand has no configuration for the country. The message is meant for the user."""
 
 
 class ApkParser:
@@ -25,22 +29,35 @@ class ApkParser:
         self.client_secret = None
         self.version = None
 
-    @staticmethod
-    def __get_cultures_code(file, country_code):
+    def __unknown_country(self, package_name):
+        app_name = BRAND.get(package_name, {}).get("app_name", package_name)
+        return UnknownCountryError(f"{app_name} is not available in the country \"{self.country_code}\". "
+                                   "Choose the country of your account.")
+
+    def __get_cultures_code(self, file, package_name):
         cultures = json.loads(file)
-        return cultures[country_code]["languages"][0]
+        try:
+            return cultures[self.country_code]["languages"][0]
+        except (KeyError, IndexError) as e:
+            raise self.__unknown_country(package_name) from e
 
     def __get_parameters_path(self):
         language, country = self.culture.split("_")
         return "res/raw-{}-r{}/parameters.json".format(language, country)
+
+    def __get_parameters(self, apk, package_name):
+        try:
+            return json.loads(apk.get_file(self.__get_parameters_path()))
+        except FileNotPresent as e:
+            raise self.__unknown_country(package_name) from e
 
     def retrieve_content_from_apk(self):
         a = APK(self.filename)
         package_name = a.get_package()
         resources = a.get_android_resources()
         self.host_brandid_prod = resources.get_string(package_name, "HOST_BRANDID_PROD")[1]
-        self.culture = self.__get_cultures_code(a.get_file("res/raw/cultures.json"), self.country_code)
-        parameters = json.loads(a.get_file(self.__get_parameters_path()))
+        self.culture = self.__get_cultures_code(a.get_file("res/raw/cultures.json"), package_name)
+        parameters = self.__get_parameters(a, package_name)
         self.client_id = parameters["cvsClientId"]
         self.client_secret = parameters["cvsSecret"]
 

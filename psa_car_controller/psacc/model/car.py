@@ -1,6 +1,9 @@
 import json
 import logging
 from copy import copy
+from psa_car_controller.common.sensitive_filter import mask_value
+from .car_model import DEFAULT_BATTERY_POWER, DEFAULT_FUEL_CAPACITY, DEFAULT_MAX_ELEC_CONSUMPTION, \
+    DEFAULT_MAX_FUEL_CONSUMPTION
 from .car_status import CarStatus
 from ..repository.car_model import CarModelRepository
 
@@ -8,6 +11,49 @@ logger = logging.getLogger(__name__)
 
 # failed status requests in a row after which the kept status is reported as outdated
 EMPTY_STATUS_LIMIT = 3
+# what a car saved while its model was unknown has in cars.json, unchanged since 2022
+UNKNOWN_MODEL_VALUES = {"battery_power": DEFAULT_BATTERY_POWER, "fuel_capacity": DEFAULT_FUEL_CAPACITY,
+                        "max_elec_consumption": DEFAULT_MAX_ELEC_CONSUMPTION,
+                        "max_fuel_consumption": DEFAULT_MAX_FUEL_CONSUMPTION}
+
+
+def _replace_unknown_model_values(data):
+    """Drop the values a saved car got from the "unknown" model, so that Car() takes them from the model found by VIN.
+
+    Nothing marks a value as edited by the user (docs/abrp.md sends users to cars.json), so only a record
+    that is exactly the unknown model is changed. Car() replaces the label by the name of the model found by VIN,
+    hence a corrected car doesn't match anymore on the next start.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("vin"), str):
+        return data
+    repository = CarModelRepository()
+    model = repository.find_known_model_by_vin(data["vin"])
+    if model is None:
+        return data
+    label_is_a_model = repository.find_model_by_name(data.get("label")) is not None
+    if label_is_a_model and data["label"] != model.name:  # the user has chosen another model
+        return data
+    if not label_is_a_model and not data.get("abrp_name") \
+            and all(data.get(field) == value for field, value in UNKNOWN_MODEL_VALUES.items()):
+        if any(getattr(model, field) != value for field, value in UNKNOWN_MODEL_VALUES.items()):
+            logger.info("cars.json: %s was saved with the values of the unknown model, now it is recognized as %s: %s",
+                        mask_value(data["vin"]), model.name,
+                        ", ".join(f"{field} {value} -> {getattr(model, field)}"
+                                  for field, value in UNKNOWN_MODEL_VALUES.items()))
+            return {key: value for key, value in data.items() if key not in UNKNOWN_MODEL_VALUES}
+        return data
+    # Car() has renamed the car on a previous start, or the user has set abrp_name: from there 46 kWh can be
+    # a leftover as well as the usable capacity entered on purpose
+    if data.get("battery_power") == DEFAULT_BATTERY_POWER != model.battery_power \
+            and data.get("fuel_capacity") in (DEFAULT_FUEL_CAPACITY, model.fuel_capacity) \
+            and data.get("max_elec_consumption") == DEFAULT_MAX_ELEC_CONSUMPTION \
+            and data.get("max_fuel_consumption") == DEFAULT_MAX_FUEL_CONSUMPTION:
+        logger.warning("cars.json: %s has battery_power %s while its model %s has %s: this can be a value from the"
+                       " time the model was unknown and it distorts the statistics. It is not changed because it may"
+                       " be intentional: if it is wrong, set battery_power to %s in cars.json",
+                       mask_value(data["vin"]), DEFAULT_BATTERY_POWER, model.name, model.battery_power,
+                       model.battery_power)
+    return data
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -61,7 +107,7 @@ class Car:
 
     @classmethod
     def from_json(cls, data: dict):
-        return cls(**data)
+        return cls(**_replace_unknown_model_values(data))
 
     def to_dict(self):
         car_dict = copy(self.__dict__)

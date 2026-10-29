@@ -1054,28 +1054,30 @@
   battery_power: 0
   fuel_capacity: 44
   abrp_name:
-  reg: VF3CCHMRPJ.*
+  reg: VF3CCHMRPJ
   max_elec_consumption: 70
-  max_fuel_consumptipn: 30
+  max_fuel_consumption: 30
 - !ElecModel
   name: E-Partner 50 kWh (2024)
   battery_power: 50
   fuel_capacity: 0
   abrp_name: Peugeot;Partner (alpha)
-  reg: VR3ENZKUXR.*
+  reg: VR3ENZKUXR
   max_elec_consumption: 50
 - !CarModel
   name: Spacetourer Vanster 2021
   battery_power: 0
   fuel_capacity: 70
   abrp_name:
-  reg: VF7VEAHXKL.*
+  reg: VF7VEAHXKL
+  max_elec_consumption: 70
+  max_fuel_consumption: 30
 - !ElecModel
   name: e-5008 Single Motor 73 kWh
   battery_power: 73
   fuel_capacity: 0
   abrp_name: peugeot:e5008:25:77
-  reg: VR3KCZKZ4R.*
+  reg: VR3KCZKZ4R
   max_elec_consumption: 70
 - !CarModel
   name: 3008-III

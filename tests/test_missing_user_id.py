@@ -6,10 +6,13 @@ The customer id was built from it, Stellantis stopped sending it for some accoun
 import os
 import tempfile
 import unittest
+from http import HTTPStatus
 from unittest.mock import MagicMock, patch
 
 import requests
+from oauth2_client.credentials_manager import OAuthError
 
+from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.constants import BRAND
 from psa_car_controller.psa.setup.app_decoder import InitialSetup, MissingCustomerIdError, describe_response
 
@@ -95,7 +98,8 @@ class TestMissingUserId(unittest.TestCase):
 
     def test_explains_the_failure_without_customer_id(self):
         for answer in ({"error": "unknown", "email": EMAIL}, [], [{"customer": None}],
-                       requests.ConnectionError("down")):
+                       requests.ConnectionError("down"),
+                       OAuthError(HTTPStatus.BAD_REQUEST, "invalid_grant"), RateLimitException("refresh")):
             with self.subTest(answer=answer):
                 setup, _ = self.setup(USER_INFO_WITHOUT_ID)
                 with self.assertRaises(MissingCustomerIdError) as error:

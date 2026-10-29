@@ -9,6 +9,7 @@ from os import environ
 from typing import Callable, List, Optional
 
 import paho.mqtt.client as mqtt
+from oauth2_client.credentials_manager import OAuthError
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 from requests import RequestException, Timeout
@@ -62,6 +63,8 @@ API_UPDATE_DELAY = 60
 API_UPDATE_MAX_DELAY = 30 * 60
 # the SMS endpoint regularly takes longer than the default timeout to answer
 SMS_TIMEOUT_IN_S = 20
+# RemoteClient.token_error values
+TOKEN_RATE_LIMITED, TOKEN_ACCOUNT_FAILED, TOKEN_REMOTE_FAILED = "rate_limited", "account_failed", "remote_failed"
 
 
 class RemoteException(Exception):
@@ -160,6 +163,10 @@ class RemoteClient:
         self.mqtt_last_connect: Optional[datetime] = None
         # the broker refused the last CONNACK: the disconnect following it isn't an expired token
         self._mqtt_connect_refused = False
+        # why the last remote token refresh failed, None once it succeeds: the mqtt socket can stay
+        # connected while every publish fails on the token, so is_connected() alone isn't a health check
+        # (TOKEN_RATE_LIMITED is temporary and heals itself, the others need the user)
+        self.token_error: Optional[str] = None
 
     def __on_mqtt_connect(self, client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
         logger.info("Connected with result code %s", reason_code)
@@ -171,6 +178,9 @@ class RemoteClient:
             return
         self.mqtt_auth_failures = 0
         self.mqtt_last_connect = datetime.now(timezone.utc)
+        # the broker took the token: a refresh which failed during an outage is no problem anymore,
+        # and with the token still fresh nothing else would refresh it and clear the error for hours
+        self.token_error = None
         topics = [MQTT_RESP_TOPIC + self.account_info.get_mqtt_customer_id() + "/#"]
         for car in self.vehicles_list:
             topics.append(MQTT_EVENT_TOPIC + car.vin)
@@ -362,6 +372,7 @@ class RemoteClient:
 
     def start(self):
         self.mqtt_auth_failures = 0
+        self.token_error = None  # a reconnect or a new OTP starts afresh, the refresh below tells again
         with self._api_update_lock:
             self._api_update_stopped = False
         if self.load_otp():
@@ -400,7 +411,8 @@ class RemoteClient:
         # Only rotate the remote token: this used to wake the first car up every cycle, which
         # drains its 12V battery for nothing (the refresh in publish() kept the token alive).
         try:
-            refreshed = self._refresh_remote_token()
+            # after a failure a token within its TTL proves nothing: it may be the one the broker refused
+            refreshed = self._refresh_remote_token(force=True) if self.token_error else self._refresh_remote_token()
         except Exception:  # pylint: disable=broad-except
             logger.exception("__keep_mqtt")
             refreshed = False
@@ -441,6 +453,11 @@ class RemoteClient:
     def mqtt_request(self, vin, req_parameters, topic):
         return MQTTRequest(topic, vin, req_parameters, self.account_info.get_mqtt_customer_id())
 
+    def _token_failed(self, error):
+        self.token_error = error
+        # the next keepalive can be 8h away, and a failed start has none: the page promises a retry
+        self.__schedule_keep_mqtt(KEEPALIVE_RETRY_PERIOD)
+
     def _refresh_remote_token(self, force=False) -> bool:
         with self._lock:
             bad_remote_token = self.remoteCredentials.refresh_token is None
@@ -465,10 +482,12 @@ class RemoteClient:
                     return True
             if self.manager.needs_login and not self.manager.rejected_grant_retry_due():
                 logger.debug("Can't refresh remote token: waiting for a new login")
+                self._token_failed(TOKEN_ACCOUNT_FAILED)
                 return False
             try:
                 if not self.manager.refresh_token_now():
                     logger.error("Can't refresh remote token: access token refresh failed")
+                    self._token_failed(TOKEN_ACCOUNT_FAILED)
                     return False
                 if bad_remote_token:
                     logger.warning("remote_refresh_token isn't defined")
@@ -492,12 +511,20 @@ class RemoteClient:
                     self._get_remote_access_token(otp_code)
                 self.remote_token_last_update = datetime.now()
                 self.mqtt_client.username_pw_set("IMA_OAUTH_ACCESS_TOKEN", self.remoteCredentials.access_token)
+                self.token_error = None
                 return True
             except RateLimitException as e:
                 logger.error("Can't refresh remote token please wait... %s", e)
+                self._token_failed(TOKEN_RATE_LIMITED)
+                return False
+            except OAuthError as e:
+                # the access token is the problem, the remote token and the OTP session are fine
+                logger.error("Can't refresh remote token: access token refresh failed: %s", e)
+                self._token_failed(TOKEN_ACCOUNT_FAILED)
                 return False
             except (RequestException, KeyError, AttributeError, RemoteException, ConfigException):
                 logger.exception("Can't refresh remote token, please redo otp procedure")
+                self._token_failed(TOKEN_REMOTE_FAILED)
                 return False
 
     def get_sms_otp_code(self):

@@ -7,8 +7,6 @@ import threading
 from os import path
 from typing import Optional
 
-from requests import RequestException
-
 import psa_car_controller
 
 from .charge_control import ChargeControls
@@ -20,6 +18,7 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.utils.utils import Singleton
 from .psa_client import PSAClient
 from psa_car_controller.common.mylogger import my_logger
+from psa_car_controller.psa.oauth import refresh_can_recover
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME, ConfigException
 from psa_car_controller.psa.status_schema import enable_raw_status_log
 from psa_car_controller.common.utils import RateLimitException
@@ -130,7 +129,7 @@ class PSACarController(metaclass=Singleton):
             elif not self.args.web_conf:
                 logger.error("Connection need to be updated, Please redo authentication process.")
                 raise ConnectionError
-            elif self.__server_unreachable():
+            elif self.__refresh_can_recover():
                 self.__retry_connection(self.CONNECTION_RETRY_DELAY)
             else:
                 logger.error("Please reconnect by going to config web page")
@@ -164,12 +163,12 @@ class PSACarController(metaclass=Singleton):
             self.myp.start_refresh_thread()
         self.start_remote_control()
 
-    def __server_unreachable(self) -> bool:
-        # a network failure says nothing about the stored token, unlike a rejected refresh token
-        return isinstance(self.myp.manager.last_refresh_error, RequestException)
+    def __refresh_can_recover(self) -> bool:
+        # a network failure or an outage says nothing about the stored token, unlike a rejected one
+        return refresh_can_recover(self.myp.manager.last_refresh_error)
 
     def __retry_connection(self, delay):
-        logger.warning("Can't reach the PSA server, retrying to connect in %d s", delay)
+        logger.warning("Can't connect to the PSA server now, retrying to connect in %d s", delay)
         if self.retry_timer is not None:
             # load_app ran again meanwhile: keep a single retry loop
             self.retry_timer.cancel()
@@ -190,7 +189,7 @@ class PSACarController(metaclass=Singleton):
         if self.is_good:
             logger.info("Connection to the PSA server is back")
             self.__start_services()
-        elif self.__server_unreachable():
+        elif self.__refresh_can_recover():
             self.__retry_connection(next_delay)
         else:
             logger.error("Please reconnect by going to config web page")

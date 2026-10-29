@@ -42,11 +42,13 @@ night hour end = 4h42
         from psa_car_controller.psacc.repository.config_repository import ConfigRepository
         self.assertRaises(FileNotFoundError, lambda: ConfigRepository._read_file("nonexistent.ini"))
 
-    def test_read_config_non_existent_config(self):
+    @patch("psa_car_controller.psacc.repository.config_repository.ConfigRepository._write")
+    def test_read_config_non_existent_config(self, mock_write):
         from psa_car_controller.psacc.repository.config_repository import ConfigRepository
         result = ConfigRepository.read_config("nonexistent.ini")
         expected_result = ConfigRepository.config_file_to_dto(ConfigRepository.get_default_config())
         self.assertEqual(result, expected_result)
+        mock_write.assert_called_once()
 
     @patch("psa_car_controller.psacc.repository.config_repository.ConfigRepository._write")
     def test_read_invalid_hour(self, mock_write):

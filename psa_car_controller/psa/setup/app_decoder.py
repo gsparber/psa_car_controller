@@ -7,10 +7,13 @@ from os import path
 from typing import Optional
 
 import requests
+from oauth2_client.credentials_manager import OAuthError
 
 from psa_car_controller.common.sensitive_filter import MASK, sensitive_filter
+from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.constants import BRAND, MQTT_BRANDCODE
 from psa_car_controller.psa.setup.apk_parser import ApkParser
+from psa_car_controller.psa.setup.countries import normalize_country_code
 from psa_car_controller.psa.setup.github import urlretrieve_from_github
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.psa_client import PSAClient, DEFAULT_CONFIG_FILENAME
@@ -66,6 +69,11 @@ def get_content_from_apk(filename: str, country_code: str) -> ApkParser:
 
 class InitialSetup:
     def __init__(self, package_name, client_email, client_password, country_code):
+        if not isinstance(package_name, str) or package_name not in BRAND:
+            raise ValueError("Choose the brand of your car before logging in.")
+        country_code = normalize_country_code(country_code)
+        if not country_code:
+            raise ValueError("Choose the country of your account before logging in.")
         self.package_name = package_name
         filename = package_name.split(".")[-1] + ".apk"
         apk_parser = get_content_from_apk(filename, country_code)
@@ -238,7 +246,7 @@ class InitialSetup:
                                          timeout=TIMEOUT_IN_S)
             res.raise_for_status()
             data = res.json()
-        except (requests.RequestException, ValueError) as ex:
+        except (requests.RequestException, ValueError, OAuthError, RateLimitException) as ex:
             logger.error("Can't get the car associations of the account: %s", ex)
             raise MissingCustomerIdError(None) from ex
         customer = None

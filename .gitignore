@@ -142,6 +142,8 @@ backup.ab
 *.apk
 *.ini
 info.db
+info.db-shm
+info.db-wal
 otp.bin
 charge_config1.json
 config.json

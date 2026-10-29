@@ -43,6 +43,8 @@ UNQUOTED_URL_BREAK = re.compile(r"""[\s"'`]""")
 CODE_IN_TEXT = re.compile(r"""(?<![\w-])code["']?\s*[:=]\s*["']?([^"'`&\s,;}#)>]+)""", re.IGNORECASE)
 # a refresh replaces the refresh token, so a second tool using the same one gets it rejected
 SHARED_TOKEN_HINT = "Is another tool running with the same token? Each tool needs its own login."
+# the error of a refresh without a stored refresh token, the library uses the same one for no session
+NO_TOKEN_ERROR = "no_token"
 
 
 def rejected_grant_hint(error: Optional[Exception]) -> str:
@@ -50,6 +52,19 @@ def rejected_grant_hint(error: Optional[Exception]) -> str:
     if isinstance(error, OAuthError) and error.error == "invalid_grant":
         return " " + SHARED_TOKEN_HINT
     return ""
+
+
+def _needs_new_login(error: OAuthError) -> bool:
+    # Only an explicit answer about the token itself. Anything else, even a 401, can be an outage
+    # or a wrong client: the token is probably fine. The status PSA uses is unverified, so ignored.
+    return error.error in ("invalid_grant", NO_TOKEN_ERROR)
+
+
+def refresh_can_recover(error: Optional[Exception]) -> bool:
+    """True if trying the same refresh token again later makes sense after this refresh error."""
+    if isinstance(error, OAuthError):
+        return not _needs_new_login(error)
+    return isinstance(error, RequestException)
 
 
 def refresh_retry_delay(failures: int) -> float:
@@ -129,7 +144,9 @@ class OpenIdCredentialManager(CredentialManager):
         self.rejected_refresh_token: Optional[str] = None
         # one refresh at a time: the refresh thread, the remote client and web requests all
         # refresh on a 401, and each extra refresh burns the rate limit (6 per 30 min)
-        self._refresh_lock = threading.Lock()
+        self._refresh_lock = threading.RLock()
+        # set under the lock: a request made by a refresh callback must not refresh again
+        self._refreshing = False
         # monotonic time the access token expires, None if PSA didn't say
         self.token_expires_at: Optional[float] = None
         self._scheduled_refresh = False
@@ -179,7 +196,16 @@ class OpenIdCredentialManager(CredentialManager):
     def rejected_grant_retry_due(self) -> bool:
         return self.needs_login and time.monotonic() - self.grant_rejected_at >= REJECTED_GRANT_RETRY_DELAY
 
+    def _refresh_token(self):
+        # not the library's: on any 401 it forgets the refresh token, which only a new login gives back
+        if not self.refresh_token:
+            raise OAuthError(HTTPStatus.UNAUTHORIZED, NO_TOKEN_ERROR, "no refresh token stored")
+        self._token_request(self._grant_refresh_token_request(self.refresh_token), False)
+
     def _process_token_response(self, token_response: dict, refresh_token_mandatory: bool):
+        if self.refresh_token and not token_response.get("refresh_token"):
+            # the library would store None: an answer without a new one leaves the old one valid
+            token_response = {**token_response, "refresh_token": self.refresh_token}
         super()._process_token_response(token_response, refresh_token_mandatory)
         # a new login or a successful refresh: the grant is good again
         self.grant_rejected_at = None
@@ -202,6 +228,9 @@ class OpenIdCredentialManager(CredentialManager):
         if rejected_access_token is None:
             rejected_access_token = self.access_token
         with self._refresh_lock:
+            if self._refreshing:
+                logger.debug("already refreshing the access token")
+                return False
             if not self.needs_login and self.access_token is not None \
                     and self.access_token != rejected_access_token:
                 logger.debug("access token already refreshed meanwhile")
@@ -211,7 +240,11 @@ class OpenIdCredentialManager(CredentialManager):
                 # don't send PSA a refresh token it already refused, until the rare retry
                 logger.debug("The refresh token was rejected, waiting for a new login")
                 return False
-            return self._refresh_with_retries()
+            self._refreshing = True
+            try:
+                return self._refresh_with_retries()
+            finally:
+                self._refreshing = False
 
     @rate_limit(6, 1800)
     def _refresh_with_retries(self) -> bool:
@@ -230,8 +263,15 @@ class OpenIdCredentialManager(CredentialManager):
                     refresh_callback()
                 return True
             except OAuthError as e:
-                # the refresh token is rejected, only a new authentication can fix it
                 self.last_refresh_error = e
+                if not _needs_new_login(e):
+                    logger.error("PSA refused to refresh the token, keeping it and trying again later: %s. "
+                                 "If this doesn't stop, log in again from the config web page.", e)
+                    if self.needs_login:
+                        # a rejected token stays rejected, and its retry waits for the next delay
+                        self.grant_rejected_at = time.monotonic()
+                    break
+                # the refresh token is rejected, only a new authentication can fix it
                 if self.needs_login:
                     logger.warning("The refresh token is still rejected, waiting for a new login: %s", e)
                 else:
@@ -295,6 +335,18 @@ class OpenIdCredentialManager(CredentialManager):
             return
         self._scheduled_refresh_failures += 1
         self._schedule_refresh(refresh_retry_delay(self._scheduled_refresh_failures))
+
+    def _bearer_request(self, method, url, **kwargs):
+        # the library refreshes on its own here, past the lock, the rejected token and the rate limit
+        sent_access_token = self.access_token
+        response = method(url, **kwargs)
+        if self.refresh_token is None or not self._is_token_expired(response):
+            return response
+        if not self.refresh_token_now(sent_access_token):
+            # not the 401: callers would take it for a refused remote token and use up an OTP code
+            raise self.last_refresh_error or OAuthError(HTTPStatus.UNAUTHORIZED, "invalid_token",
+                                                        "the access token can't be refreshed now")
+        return method(url, **kwargs)
 
     def request(self, method, url, **kwargs):  # pylint: disable=W0221
         if "timeout" not in kwargs:

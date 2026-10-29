@@ -9,26 +9,26 @@ Run with: python -m unittest tests.test_ha_ingress_integration -v
 or: python tests/test_ha_ingress_integration.py
 """
 import os
+import subprocess
 import sys
 import time
 import re
+import shutil
 import socket
+import tempfile
 import requests
-import threading
 from unittest import TestCase
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT_DIR)
 
 
-def is_port_free(port, host='127.0.0.1'):
-    """Check if a port is free on the specified host."""
+def get_free_port(host='127.0.0.1'):
+    """A port nothing listens on: another test run on this machine may use any fixed one."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind((host, port))
-            return True
-        except socket.error:
-            return False
+        s.bind((host, 0))
+        return s.getsockname()[1]
 
 
 class TestHomeAssistantIngressIntegration(TestCase):
@@ -40,45 +40,32 @@ class TestHomeAssistantIngressIntegration(TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up test server"""
-        cls.server_thread = None
-        cls.server_port = 18080
+        cls.server_process = None
+        cls.server_port = get_free_port()
         cls.server_url = f"http://127.0.0.1:{cls.server_port}"
 
-        # Check if port is free before starting server
-        if not is_port_free(cls.server_port):
-            raise RuntimeError(f"Port {cls.server_port} is already in use")
+        # the app saves its config file: give it a copy, the original is tracked by git
+        tmp_dir = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(tmp_dir.cleanup)
+        config_path = shutil.copy(os.path.join(ROOT_DIR, "tests", "data", "config.json"), tmp_dir.name)
 
-        # Start the PSA app in a thread
-        def start_server():
-            from psa_car_controller.__main__ import main
-            from psa_car_controller.psacc.application.car_controller import PSACarController
-
-            # Override sys.argv to pass the required arguments
-            original_argv = sys.argv
-            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "config.json")
-            try:
-                # Set up command line arguments
-                sys.argv = [
-                    'psa_car_controller',
-                    '--web-conf',
-                    '-r',
-                    '--offline',
-                    '-d', '10',
-                    '-l', '127.0.0.1',
-                    '-p', str(cls.server_port),
-                    '-b', '/',
-                    '-f', config_path
-                ]
-
-                # Run the app
-                main()
-            except SystemExit:
-                pass
-            finally:
-                sys.argv = original_argv
-
-        cls.server_thread = threading.Thread(target=start_server, daemon=True)
-        cls.server_thread.start()
+        # Start the PSA app in its own process: main() sets up the app singleton and the Dash app of the process,
+        # the other test files need these for themselves, whichever order they run in
+        log_path = os.path.join(tmp_dir.name, "server.log")
+        with open(log_path, "w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(  # pylint: disable=consider-using-with
+                [sys.executable, "-m", "psa_car_controller",
+                 '--web-conf',
+                 '-r',
+                 '--offline',
+                 '-d', '10',
+                 '-l', '127.0.0.1',
+                 '-p', str(cls.server_port),
+                 '-b', '/',
+                 '-f', config_path],
+                cwd=tmp_dir.name, env={**os.environ, "PYTHONPATH": ROOT_DIR},
+                stdout=log_file, stderr=subprocess.STDOUT)
+        cls.addClassCleanup(cls.stop_server, process)
 
         # Wait for server to start
         max_wait = 15
@@ -88,22 +75,27 @@ class TestHomeAssistantIngressIntegration(TestCase):
                 if response.status_code in (200, 404):
                     break
             except requests.exceptions.RequestException:
+                if process.poll() is not None:
+                    break
                 time.sleep(1)
         else:
-            cls.server_thread = None
-            raise RuntimeError(f"Server failed to start on port {cls.server_port} within {max_wait}s")
+            process.kill()
+            process.wait()
+        if process.poll() is not None:
+            with open(log_path, encoding="utf-8") as log_file:
+                raise RuntimeError(f"Server failed to start on port {cls.server_port}:\n{log_file.read()[-2000:]}")
+        cls.server_process = process
 
         time.sleep(2)  # Extra time for Dash to initialize
 
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up test server"""
-        # The daemon thread will exit when the main process exits
-        pass
+    @staticmethod
+    def stop_server(process):
+        process.terminate()
+        process.wait(timeout=10)
 
     def setUp(self):
         """Check if server is running before each test"""
-        if self.server_thread is None:
+        if self.server_process is None:
             self.skipTest("Server failed to start")
 
         # Verify server is responsive

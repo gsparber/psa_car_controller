@@ -2,21 +2,14 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from dash import html
-
 from psa_car_controller.psa.remote_commands import WOKEN_UP
-from psa_car_controller.web import app as web_app
 from tests.test_remote_command_answers import answer, published, OTHER_VIN
 from tests.test_remote_commands import get_ready_remote_client, VIN
+from tests.utils import get_web_view
 
 
 def get_api_view():
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        if web_app.app is None:  # run alone: the integration tests set the app up otherwise
-            web_app.config_flask("test", "/", False, "127.0.0.1", 0, view="psa_car_controller.web.view.api")
-            web_app.dash_app.layout = html.Div()  # dash refuses requests without one
-        from psa_car_controller.web.view import api as api_view  # pylint: disable=import-outside-toplevel
-    return api_view
+    return get_web_view("api")
 
 
 class TestCommandApi(unittest.TestCase):

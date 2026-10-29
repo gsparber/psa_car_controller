@@ -3,24 +3,17 @@ import unittest
 from unittest.mock import MagicMock, patch
 from urllib.parse import quote
 
-from dash import html
 from oauth2_client.credentials_manager import ServiceInformation
 
 from psa_car_controller.psa.oauth import OpenIdCredentialManager, extract_code
-from psa_car_controller.web import app as web_app
+from tests.utils import get_web_view, isolate_jobs, wait_for_job
 
 CODE = "0a1b2c3d-1111-2222-3333-444455556666"
 REDIRECT_URL = f"mymap://oauth2redirect/de?code={CODE}&scope=openid%20profile"
 
 
 def get_config_oauth():
-    with patch("sys.argv", ["psa-car-controller"]):  # the app singleton parses the command line
-        if web_app.app is None:  # run alone: the integration tests set the app up otherwise
-            web_app.config_flask("test", "/", False, "127.0.0.1", 0,
-                                 view="psa_car_controller.web.view.config_oauth")
-            web_app.dash_app.layout = html.Div()
-        from psa_car_controller.web.view import config_oauth  # pylint: disable=import-outside-toplevel
-    return config_oauth
+    return get_web_view("config_oauth")
 
 
 def manager():
@@ -96,13 +89,15 @@ class TestConnectWithCode(unittest.TestCase):
 class TestFinishOauth(unittest.TestCase):
     def test_rejected_input_is_neither_logged_nor_shown(self):
         config_oauth = get_config_oauth()
+        isolate_jobs(self)
         psa = manager()
         setup = MagicMock()
         setup.connect.side_effect = psa.connect_with_code
-        with patch.object(config_oauth, "callback_context", MagicMock(triggered=True)), \
-                patch.object(config_oauth.config_views, "INITIAL_SETUP", setup), \
+        with patch.object(config_oauth.config_views, "INITIAL_SETUP", setup), \
                 self.assertLogs(config_oauth.logger, "ERROR") as logs:
-            alert = config_oauth.finish_oauth(1, "mymap://oauth2redirect/de?code=live-secret")
+            _, stored, *_ = config_oauth.finish_oauth(1, "mymap://oauth2redirect/de?code=live-secret")
+            wait_for_job(config_oauth.config_views.LOGIN_JOB)
+        alert = config_oauth.poll_oauth(stored, 1)[5]
         self.assertIn("Invalid code length", alert.children)
         self.assertNotIn("live-secret", alert.children)
         self.assertNotIn("live-secret", "\n".join(logs.output))

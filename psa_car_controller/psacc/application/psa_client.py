@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from json import JSONEncoder
 from hashlib import md5
 from sqlite3.dbapi2 import IntegrityError
+from typing import Optional
 
 from oauth2_client.credentials_manager import ServiceInformation
 from urllib3.exceptions import HTTPError
@@ -416,13 +417,28 @@ class PSAClient:
     def save_config(self, name=None, force=False):
         if name is None:
             name = self.config_file
-        config_str = json.dumps(self, cls=PSAClientEncoder, sort_keys=True, indent=4).encode("utf8")
+        config = json.loads(json.dumps(self, cls=PSAClientEncoder))
+        if not config["refresh_token"]:
+            # null would lose the login for good, while a stored token might still be accepted
+            config["refresh_token"] = self._stored_refresh_token(name)
+            if config["refresh_token"]:
+                logger.warning("No refresh token in memory, keeping the one in %s", name)
+        config_str = json.dumps(config, sort_keys=True, indent=4).encode("utf8")
         new_hash = md5(config_str).hexdigest()
         if force or self._config_hash != new_hash:
             with open(name, "wb") as f:
                 f.write(config_str)
             self._config_hash = new_hash
             logger.info("save config change")
+
+    @staticmethod
+    def _stored_refresh_token(name) -> Optional[str]:
+        try:
+            with open(name, "r", encoding="utf-8") as f:
+                return json.load(f).get("refresh_token")
+        except (OSError, ValueError, AttributeError):
+            # no config yet, or not one we can read
+            return None
 
     @staticmethod
     def load_config(name="config.json"):

@@ -615,6 +615,7 @@ body {
 
 /* Settings: connection state badges */
 .status-ok,
+.status-warn,
 .status-error {
   font-size: 0.9rem;
   font-weight: 500;
@@ -625,8 +626,26 @@ body {
   color: var(--bs-success-text-emphasis);
 }
 
+.status-warn {
+  color: var(--bs-warning-text-emphasis);
+}
+
 .status-error {
   color: var(--bs-danger-text-emphasis);
+}
+
+/* Login, OTP: step of a background job */
+.job-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  color: var(--bs-secondary-color);
+  font-size: 0.9rem;
+}
+
+.job-status:empty {
+  display: none;
 }
 
 /* Charge: "Saved" confirmation after each automatic save */

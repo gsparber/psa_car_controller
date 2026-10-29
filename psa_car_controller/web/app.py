@@ -117,7 +117,10 @@ def config_flask(title, base_path, debug: bool, host, port, reloader=False,
                  # pylint: disable=too-many-arguments,too-many-positional-arguments
                  unminified=False, view="psa_car_controller.web.view.views"):
     global app, dash_app
-    reload_view = app is not None
+    # The views bind app and dash_app when imported and register their routes and callbacks there, so a new app would
+    # stay empty: no API, nearly no callbacks, and the catch-all of Dash still answers 200. Keep the running one.
+    if app is not None:
+        raise RuntimeError("config_flask can only be called once per process")
     app = Flask(__name__)
     app.logger.addHandler(file_handler)
     try:
@@ -147,8 +150,6 @@ def config_flask(title, base_path, debug: bool, host, port, reloader=False,
     app.wsgi_app = MyProxyFix(dash_app, base_path)
     # keep this line
     importlib.import_module(view)
-    if reload_view:
-        importlib.reload(view)
     return {"hostname": host, "port": port, "application": application, "use_reloader": reloader, "use_debugger": debug}
 
 
