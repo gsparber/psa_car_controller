@@ -28,12 +28,28 @@ logger = logging.getLogger(__name__)
 
 META_TAGS = [
     {"name": "viewport", "content": "width=device-width, initial-scale=1, viewport-fit=cover"},
-    {"name": "theme-color", "content": "#f8f9fa"},
+    {"name": "color-scheme", "content": "light dark"},
+    {"name": "theme-color", "content": "#f2f2f7", "media": "(prefers-color-scheme: light)"},
+    {"name": "theme-color", "content": "#000000", "media": "(prefers-color-scheme: dark)"},
     {"name": "mobile-web-app-capable", "content": "yes"},
     {"name": "apple-mobile-web-app-capable", "content": "yes"},
     {"name": "apple-mobile-web-app-status-bar-style", "content": "default"},
     {"name": "apple-mobile-web-app-title", "content": "PSACC"},
 ]
+
+# Follow the system light/dark setting, also when it changes while the app is open. Inline in <head> so the page
+# never flashes in the wrong theme before the assets load. The classic pages under /v1/ were made for light only.
+# views calls window.psaccApplyTheme again on every page change, since Dash changes pages without a reload.
+THEME_SCRIPT = """<script>(function () {
+        var dark = window.matchMedia('(prefers-color-scheme: dark)')
+        function apply () {
+          var classic = window.location.pathname.indexOf('/v1/') !== -1
+          document.documentElement.setAttribute('data-bs-theme', dark.matches && !classic ? 'dark' : 'light')
+        }
+        window.psaccApplyTheme = apply
+        apply()
+        dark.addEventListener('change', apply)
+      }())</script>"""
 
 
 class PwaDash(Dash):
@@ -46,8 +62,22 @@ class PwaDash(Dash):
             f'<link rel="manifest" href="{self.get_asset_url("manifest.webmanifest")}" crossorigin="use-credentials">',
             f'<link rel="apple-touch-icon" href="{self.get_asset_url("images/icon-180.png")}">',
             f'<link rel="icon" type="image/png" sizes="192x192" href="{self.get_asset_url("images/icon-192.png")}">',
+            THEME_SCRIPT,
         ])
         return super().interpolate_index(**kwargs)
+
+
+LEGACY_PREFIX = "/v1"
+LEGACY_PAGES = ("/v1/config", "/v1/stats")
+
+
+def legacy_page_path(path):
+    """The classic pages live one level down (/v1/stats) while Dash loads its scripts and callbacks with urls
+    relative to the page (needed behind Home Assistant ingress): those requests arrive as /v1/_dash-...,
+    so everything under /v1/ except the pages themselves is served from the root."""
+    if path.startswith(LEGACY_PREFIX + "/") and path.rstrip("/") not in LEGACY_PAGES:
+        return path[len(LEGACY_PREFIX):]
+    return path
 
 
 class MyProxyFix(ProxyFix):
@@ -71,7 +101,7 @@ class MyProxyFix(ProxyFix):
             self.dash_app.config.requests_pathname_prefix = prefix
             self.dash_app.config.url_base_pathname = prefix
         self.dash_app.config.assets_external_path = prefix
-
+        environ["PATH_INFO"] = legacy_page_path(environ.get("PATH_INFO", ""))
         return super().__call__(environ, start_response)
 
 

@@ -1,7 +1,6 @@
-"""Insights page: driving and charging totals for a period, sized for phones. The full analysis stays on /stats."""
+"""Insights page: driving and charging totals for a period, sized for phones. The full analysis stays on /v1/stats."""
 import logging
 
-import dash_bootstrap_components as dbc
 from dash import dcc, html
 from dash.dependencies import Input, Output
 from dash.exceptions import PreventUpdate
@@ -81,8 +80,8 @@ def get_insights_layout():
         ui.page_title("Insights"),
         ui.period_chips(PERIOD, {key: value[0] for key, value in insights_data.PERIODS.items()}, "30d"),
         dcc.Loading(html.Div(id=CONTENT), type="dot"),
-        dbc.Button([html.I(className="bi bi-table me-2"), "Detailed statistics (trips, charges, map)"],
-                   href=dash_app.get_relative_path("/stats"), color="link", className="w-100 mt-3"),
+        html.Div(ui.link_row("bi-table", "Detailed statistics", dash_app.get_relative_path("/v1/stats")),
+                 className="list-group mt-4"),
     ], className="page")
 
 

@@ -65,16 +65,25 @@ def period_chips(chip_id, periods, value):
     """Segmented control to pick a time range; periods is {value: label}."""
     return dbc.RadioItems(id=chip_id, value=value, inline=True, persistence=True, persistence_type="local",
                           options=[{"label": label, "value": key} for key, label in periods.items()],
-                          className="period-chips", inputClassName="btn-check",
-                          labelClassName="btn btn-sm btn-outline-secondary", labelCheckedClassName="active")
+                          className="segmented", inputClassName="btn-check",
+                          labelClassName="segment", labelCheckedClassName="active")
+
+
+def link_row(icon, label, href):
+    """List row that opens another page, with the chevron phones use for "goes somewhere"."""
+    return dcc.Link([html.I(className=f"bi {icon} me-3"),
+                     html.Span(label, className="flex-grow-1"),
+                     html.I(className="bi bi-chevron-right text-body-secondary")],
+                    href=href, className="list-group-item list-group-item-action d-flex align-items-center text-body")
 
 
 def bar_chart(x, y, unit, color="#0d6efd", height=200):
-    """Small bar chart sized for phones: no toolbar, no zoom, values on hover."""
+    """Small bar chart sized for phones: no toolbar, no zoom, values on hover.
+    Text colors come from the CSS (.mini-chart) so the chart follows the light/dark theme."""
     fig = go.Figure(go.Bar(x=x, y=y, marker_color=color, hovertemplate=f"%{{x}}<br>%{{y:.1f}} {unit}<extra></extra>"))
     fig.update_layout(height=height, margin={"l": 8, "r": 8, "t": 8, "b": 8}, showlegend=False,
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.25,
-                      xaxis={"fixedrange": True, "showgrid": False},
+                      xaxis={"fixedrange": True, "showgrid": False, "linecolor": "rgba(128,128,128,0.3)"},
                       yaxis={"fixedrange": True, "ticksuffix": f" {unit}", "gridcolor": "rgba(128,128,128,0.2)"},
                       font={"size": 11})
     return dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True}, className="mini-chart")

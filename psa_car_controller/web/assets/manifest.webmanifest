@@ -6,14 +6,14 @@
   "scope": "../",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f8f9fa",
-  "theme_color": "#f8f9fa",
+  "background_color": "#f2f2f7",
+  "theme_color": "#f2f2f7",
   "icons": [
     {"src": "images/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
     {"src": "images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
     {"src": "images/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
   ],
   "shortcuts": [
-    {"name": "Stats", "url": "../stats", "icons": [{"src": "images/icon-192.png", "sizes": "192x192"}]}
+    {"name": "Stats", "url": "../v1/stats", "icons": [{"src": "images/icon-192.png", "sizes": "192x192"}]}
   ]
 }

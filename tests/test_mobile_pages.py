@@ -108,3 +108,37 @@ class TestVehiclePicture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLog(unittest.TestCase):
+    def test_parse_and_filter(self):
+        from psa_car_controller.web.view import log  # pylint: disable=import-outside-toplevel
+        entries = log.parse("2026-10-29 17:08:23,614 :: INFO :: database initialized !\n"
+                            "2026-10-29 17:08:24,001 :: ERROR :: Failed to record SOH\n"
+                            "Traceback (most recent call last):\n"
+                            "  File \"x.py\", line 1\n"
+                            "2026-10-29 17:08:25,000 :: DEBUG :: Executing callbacks\n")
+        self.assertEqual(["INFO", "ERROR", "DEBUG"], [e["level"] for e in entries])
+        self.assertIn("Traceback", entries[1]["details"])
+        self.assertEqual(2, len(log.filter_level(entries, "info")))
+        self.assertEqual(1, len(log.filter_level(entries, "warning")))
+        self.assertEqual(3, len(log.filter_level(entries, "debug")))
+
+    def test_read_tail_drops_cut_line(self):
+        from psa_car_controller.web.view import log  # pylint: disable=import-outside-toplevel
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".log") as f:
+            f.write("first line that gets cut\nsecond\nthird\n")
+        try:
+            self.assertEqual("second\nthird\n", log.read_tail(f.name, size=16))
+        finally:
+            os.remove(f.name)
+
+
+class TestLegacyPagePath(unittest.TestCase):
+    def test_paths(self):
+        from psa_car_controller.web.app import legacy_page_path  # pylint: disable=import-outside-toplevel
+        self.assertEqual("/v1/stats", legacy_page_path("/v1/stats"))
+        self.assertEqual("/v1/config/", legacy_page_path("/v1/config/"))
+        self.assertEqual("/_dash-layout", legacy_page_path("/v1/_dash-layout"))
+        self.assertEqual("/assets/pwa.js", legacy_page_path("/v1/assets/pwa.js"))
+        self.assertEqual("/charge", legacy_page_path("/charge"))

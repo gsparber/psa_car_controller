@@ -54,8 +54,8 @@ def finish_oauth(n_clicks, code):  # pylint: disable=unused-argument
     if ctx.triggered:
         try:
             config_views.INITIAL_SETUP.connect(code)
-            return dbc.Alert(["PSA login finish !", html.A(" Go to otp config",
-                             href=dash_app.config.requests_pathname_prefix + "config_otp")], color="success")
+            return dbc.Alert(["PSA login finish !", html.A(" Continue with remote control setup",
+                             href=dash_app.get_relative_path("/config"))], color="success")
         except Exception as e:
             logger.exception("finish_oauth:")
             return dbc.Alert(str(e), color="danger")

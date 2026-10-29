@@ -2,7 +2,7 @@
 import logging
 
 import dash_bootstrap_components as dbc
-from dash import ALL, dcc, html
+from dash import ALL, callback_context, dcc, html
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
@@ -22,6 +22,12 @@ SAVE = "climate-save"
 PROG_ON = "climate-prog-on"
 PROG_TIME = "climate-prog-time"
 PROG_DAYS = "climate-prog-days"
+PROG_DEL = "climate-prog-del"
+PROG_CARD = "climate-prog-card"
+VISIBLE = "climate-visible"
+ADD = "climate-add"
+ADD_WRAP = "climate-add-wrap"
+EMPTY = "climate-empty"
 
 
 def _status(car, pending):
@@ -50,34 +56,46 @@ def current_programs(car):
     return programs
 
 
-def _program_card(index, program):
+def _program_card(index, program, visible):
     is_set = precond_programs.is_set(program)
     time_value = f"{program['hour']:02d}:{program['minute']:02d}" if is_set else ""
     days = [i for i, flag in enumerate(program.get("day", [])) if flag]
     return html.Div([
         html.Div([
-            html.Strong(f"Schedule {index + 1}"),
-            dbc.Switch(id={"type": PROG_ON, "index": index}, value=bool(program.get("on")) and is_set,
+            html.Div([
+                html.Label("Ready at", htmlFor={"type": PROG_TIME, "index": index}, className="form-label small mb-1"),
+                dbc.Input(id={"type": PROG_TIME, "index": index}, type="time", value=time_value),
+            ]),
+            # a free slot starts switched on: whoever adds a schedule wants it to run
+            dbc.Switch(id={"type": PROG_ON, "index": index}, value=bool(program.get("on")) or not is_set,
                        className="mb-0 ms-auto", label="On"),
-        ], className="d-flex align-items-center mb-2"),
-        html.Label("Ready at", className="form-label small mb-1"),
-        dbc.Input(id={"type": PROG_TIME, "index": index}, type="time", value=time_value, className="mb-2"),
+            dbc.Button(html.I(className="bi bi-trash3"), id={"type": PROG_DEL, "index": index}, n_clicks=0,
+                       color="link", className="icon-button text-danger ms-2", title="Remove schedule"),
+        ], className="d-flex align-items-end mb-3"),
         dbc.Checklist(id={"type": PROG_DAYS, "index": index}, value=days, inline=True,
                       options=[{"label": day[:2], "value": i} for i, day in enumerate(precond_programs.DAYS)],
                       className="day-chips", inputClassName="btn-check",
                       labelClassName="btn btn-sm btn-outline-primary", labelCheckedClassName="active"),
-    ], className="card-block program-card")
+    ], id={"type": PROG_CARD, "index": index}, className="card-block program-card", hidden=not visible)
 
 
 def _programs(car):
     programs = current_programs(car)
+    # The car always keeps four slots; only the ones in use are shown, "Add schedule" reveals a free one
+    visible = [precond_programs.is_set(programs[key]) for key in precond_programs.KEYS]
     note = None
     if precond_programs.is_default(programs):
         note = html.Small("No schedule received from the car yet. Saving replaces the schedules stored in the car.",
                           className="text-body-secondary d-block mb-2")
-    return [note,
-            *[_program_card(i, programs[key]) for i, key in enumerate(precond_programs.KEYS)],
-            dbc.Button("Save schedules", id=SAVE, color="primary", className="w-100", n_clicks=0,
+    return [dcc.Store(id=VISIBLE, data=visible),
+            note,
+            html.P("No schedule. Add one to have the cabin warm or cool when you leave.", id=EMPTY,
+                   className="text-body-secondary", hidden=any(visible)),
+            *[_program_card(i, programs[key], visible[i]) for i, key in enumerate(precond_programs.KEYS)],
+            html.Div(dbc.Button([html.I(className="bi bi-plus-lg me-2"), "Add schedule"], id=ADD, n_clicks=0,
+                                color="secondary", outline=True, className="w-100 mb-3 add-button"),
+                     id=ADD_WRAP, hidden=all(visible)),
+            dbc.Button("Save schedules", id=SAVE, color="primary", className="w-100 big-button", n_clicks=0,
                        disabled=not remote_ready())]
 
 
@@ -109,16 +127,44 @@ def show_programs(vin):
     return _programs(get_car(vin))
 
 
+@dash_app.callback(Output(VISIBLE, "data"),
+                   Input(ADD, "n_clicks"), Input({"type": PROG_DEL, "index": ALL}, "n_clicks"),
+                   State(VISIBLE, "data"), prevent_initial_call=True)
+def add_or_remove(_add, _deletes, visible):
+    trigger = callback_context.triggered_id
+    if not trigger or not callback_context.triggered[0]["value"]:
+        raise PreventUpdate
+    visible = list(visible)
+    if trigger == ADD:
+        if all(visible):
+            raise PreventUpdate
+        visible[visible.index(False)] = True
+    else:
+        visible[trigger["index"]] = False
+    return visible
+
+
+@dash_app.callback(Output({"type": PROG_CARD, "index": ALL}, "hidden"), Output(ADD_WRAP, "hidden"),
+                   Output(EMPTY, "hidden"),
+                   Input(VISIBLE, "data"), prevent_initial_call=True)
+def show_cards(visible):
+    return [not v for v in visible], all(visible), any(visible)
+
+
 @dash_app.callback(*ui.toast_outputs(), Input(SAVE, "n_clicks"), State(CAR_SELECT, "value"),
+                   State(VISIBLE, "data"),
                    State({"type": PROG_ON, "index": ALL}, "value"),
                    State({"type": PROG_TIME, "index": ALL}, "value"),
                    State({"type": PROG_DAYS, "index": ALL}, "value"),
                    prevent_initial_call=True)
-def save_programs(n_clicks, vin, on_flags, times, day_lists):
+def save_programs(n_clicks, vin, visible, on_flags, times, day_lists):
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     if not n_clicks:
         raise PreventUpdate
-    for on, time, days in zip(on_flags, times, day_lists):
-        if on and (not time or not days):
+    # a removed schedule is sent as unset, so the car frees the slot
+    times = [time if shown else None for shown, time in zip(visible, times)]
+    for shown, on, time, days in zip(visible, on_flags, times, day_lists):
+        if shown and on and (not time or not days):
             return ui.toast_message("An active schedule needs a time and at least one day", ok=False)
     programs = validate_preconditioning_programs(precond_programs.build(on_flags, times, day_lists))
     try:

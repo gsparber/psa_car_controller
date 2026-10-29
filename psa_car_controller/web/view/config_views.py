@@ -18,87 +18,65 @@ logger = logging.getLogger(__name__)
 app = PSACarController()
 INITIAL_SETUP: InitialSetup = None
 
-setup_config_layout = dbc.Row(dbc.Col(md=12, lg=2, className="m-3", children=[
-    dbc.Row(html.H2('Config')),
-    dbc.Row(className="ms-2", children=[
-        dbc.Form([
-            html.Div(className="mb-3", children=[
-                dbc.Label("Car Brand", html_for="psa-app"),
-                dcc.Dropdown(
-                    id="psa-app",
-                    options=[
-                        {"label": "Peugeot", "value": "com.psa.mym.mypeugeot"},
-                        {"label": "Opel", "value": "com.psa.mym.myopel"},
-                        {"label": "Citroën", "value": "com.psa.mym.mycitroen"},
-                        {"label": "DS", "value": "com.psa.mym.myds"},
-                        {"label": "Vauxhall", "value": "com.psa.mym.myvauxhall"}
-                    ],
-                )]),
-            html.Div(className="mb-3", children=[
-                dbc.Label("Email", html_for="psa-email"),
-                dbc.Input(type="email", id="psa-email", placeholder="Enter email"),
-                dbc.FormText(
-                    "PSA account email",
-                    color="secondary",
-                )]),
-            html.Div(className="mb-3", children=[
-                dbc.Label("Password", html_for="psa-password"),
-                dbc.Input(
-                    type="password",
-                    id="psa-password",
-                    placeholder="Enter password",
-                ),
-                dbc.FormText(
-                    "PSA account password",
-                    color="secondary",
-                )]),
-            html.Div(className="mb-3", children=[
-                dbc.Label("Country code", html_for="countrycode"),
-                dbc.Input(
-                    type="text",
-                    id="psa-countrycode",
-                    placeholder="Enter your country code",
-                ),
-                dbc.FormText(
-                    "Example: FR for FRANCE or GB for Great Britain...",
-                    color="secondary",
-                )]),
-            dbc.Row(dbc.Button("Submit", color="primary", id="submit-form")),
-            dbc.Row(dbc.FormText(
-                "After submit be patient it can take some time...",
-                color="secondary")),
-            dcc.Loading(
-                id="loading-2",
-                children=[html.Div([html.Div(id="form_result")])],
-                type="circle",
-            ),
-        ])
-    ])]))
+BRANDS = [{"label": "Peugeot", "value": "com.psa.mym.mypeugeot"},
+          {"label": "Opel", "value": "com.psa.mym.myopel"},
+          {"label": "Citroën", "value": "com.psa.mym.mycitroen"},
+          {"label": "DS", "value": "com.psa.mym.myds"},
+          {"label": "Vauxhall", "value": "com.psa.mym.myvauxhall"}]
 
-config_otp_layout = dbc.Row(dbc.Col(className="col-md-12 col-lg-2 m-3", children=[
-    dbc.Row(html.H2('Config OTP')),
-    dbc.Form(className="ms-2", children=[
+
+def login_form(brand=None, email=None, country=None):
+    """PSA account login; the callbacks below handle it on the settings page and on /v1/config."""
+    return dbc.Form([
+        html.Div(className="mb-3", children=[
+            dbc.Label("Car Brand", html_for="psa-app"),
+            dcc.Dropdown(id="psa-app", options=BRANDS, value=brand, clearable=False, searchable=False)]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Email", html_for="psa-email"),
+            dbc.Input(type="email", id="psa-email", placeholder="Enter email", value=email, autoComplete="username"),
+            dbc.FormText("PSA account email", color="secondary")]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Password", html_for="psa-password"),
+            dbc.Input(type="password", id="psa-password", placeholder="Enter password",
+                      autoComplete="current-password"),
+            dbc.FormText("PSA account password", color="secondary")]),
+        html.Div(className="mb-3", children=[
+            dbc.Label("Country code", html_for="psa-countrycode"),
+            dbc.Input(type="text", id="psa-countrycode", placeholder="Enter your country code", value=country,
+                      maxLength=2),
+            dbc.FormText("Example: FR for FRANCE or GB for Great Britain...", color="secondary")]),
+        dbc.Button("Submit", color="primary", id="submit-form", className="w-100"),
+        dbc.FormText("After submit be patient it can take some time...", color="secondary"),
+        dcc.Loading(id="loading-2", children=[html.Div([html.Div(id="form_result")])], type="circle"),
+    ])
+
+
+def otp_form():
+    """SMS code + PIN to activate remote control (OTP)."""
+    return dbc.Form([
         dbc.Label("Click to receive a code by SMS", html_for="ask-sms"),
-        dbc.Button("Send SMS", color="info", id="ask-sms"),
+        dbc.Button("Send SMS", color="primary", outline=True, id="ask-sms", className="d-block"),
         html.Div(id="sms-demand-result", className="mt-2"),
-        dbc.Label("Write the code you just received by SMS", html_for="psa-email"),
-        dbc.Input(type="text", id="psa-code", placeholder="Enter code"),
-        dbc.Label("Enter your PIN code", html_for="psa-pin"),
-        dbc.Input(
-            type="password",
-            id="psa-pin",
-            placeholder="Enter codepin",
-        ),
-        dbc.FormText(
-            "It's a digit password",
-            color="secondary",
-        ),
+        dbc.Label("Write the code you just received by SMS", html_for="psa-code", className="mt-2"),
+        dbc.Input(type="text", id="psa-code", placeholder="Enter code", inputMode="numeric",
+                  autoComplete="one-time-code"),
+        dbc.Label("Enter your PIN code", html_for="psa-pin", className="mt-2"),
+        dbc.Input(type="password", id="psa-pin", placeholder="Enter codepin", inputMode="numeric"),
+        dbc.FormText("It's a digit password", color="secondary"),
         html.Div([
-            dbc.Button("Submit", color="primary", id="finish-otp"),
-            html.Div(id="opt-result")]),
+            dbc.Button("Submit", color="primary", id="finish-otp", className="w-100 mt-3"),
+            html.Div(id="opt-result", className="mt-2")]),
         dcc.Location(id="otp-redirect-url", refresh=True),
         dcc.Interval(id="otp-redirect-interval", interval=5000, n_intervals=0, disabled=True),
-    ])]))
+    ])
+
+
+def setup_config_layout():
+    return dbc.Row(dbc.Col(md=12, lg=4, className="m-3", children=[html.H2('Config'), login_form()]))
+
+
+def config_otp_layout():
+    return dbc.Row(dbc.Col(md=12, lg=4, className="m-3", children=[html.H2('Config OTP'), otp_form()]))
 
 
 def log_layout():
@@ -122,8 +100,8 @@ def log_layout():
 def config_layout(activeTabs="log"):
     return dbc.Tabs(active_tab=activeTabs, children=[
         dbc.Tab([log_layout()], label="Log", tab_id="log"),
-        dbc.Tab([setup_config_layout], label="User config", tab_id="login"),
-        dbc.Tab([config_otp_layout], label="OTP config", tab_id="otp")])
+        dbc.Tab([setup_config_layout()], label="User config", tab_id="login"),
+        dbc.Tab([config_otp_layout()], label="OTP config", tab_id="otp")])
 
 
 @dash_app.callback(
@@ -151,8 +129,8 @@ def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: dis
             code = get_oauth_code_headless(auth_url, email, password, scheme)
             INITIAL_SETUP.connect(code)
             return dbc.Alert(["Login successful! ",
-                              html.A("Go to OTP config",
-                                     href=dash_app.config.requests_pathname_prefix + "config_otp")], color="success")
+                              html.A("Continue with remote control setup",
+                                     href=dash_app.get_relative_path("/config"))], color="success")
         except HeadlessOAuthError as e:
             redirect_uri = parse.quote(auth_url)
             return dbc.Alert(

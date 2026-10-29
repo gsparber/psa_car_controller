@@ -24,7 +24,7 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.tools.utils import diff_dashtable, unix_time_millis, get_marks_from_start_end, create_card
 from psa_car_controller.web.view.config_oauth import get_oauth_config_layout
-from psa_car_controller.web.view.config_views import log_layout, config_layout
+from psa_car_controller.web.view.config_views import config_layout
 
 # pylint: disable=invalid-name
 from psa_car_controller.web.tools.figurefilter import FigureFilter
@@ -33,6 +33,8 @@ from psa_car_controller.web.view.home import get_home_layout
 from psa_car_controller.web.view.charge import get_charge_layout
 from psa_car_controller.web.view.climate import get_climate_layout
 from psa_car_controller.web.view.insights import get_insights_layout, set_trips_provider
+from psa_car_controller.web.view.settings import get_settings_layout
+from psa_car_controller.web.view.log import get_log_layout
 from psa_car_controller.web.view.car_access import pending_store
 from psa_car_controller.web.view import ui
 
@@ -42,6 +44,7 @@ from psa_car_controller.web.view import api  # pylint: disable=unused-import
 logger = CustomLogger.getLogger(__name__)
 
 EMPTY_DIV = "empty-div"
+THEME_STORE = "app-theme"
 CALLBACK_CREATED = False
 
 trips: Trips = Trips()
@@ -60,30 +63,34 @@ NAV_ITEMS = [("/", "bi-car-front-fill", "Car"),
              ("/climate", "bi-snow", "Climate"),
              ("/insights", "bi-bar-chart-line-fill", "Insights"),
              ("/config", "bi-gear-fill", "Settings")]
+# The full statistics need a big screen: a tab on desktop, reached from Insights on phones
+DESKTOP_NAV_ITEMS = NAV_ITEMS[:4] + [("/v1/stats", "bi-table", "Stats")] + NAV_ITEMS[4:]
 # Pages without their own tab highlight the closest one
-NAV_PARENT = {"/stats": "/insights", "/log": "/config", "/config_otp": "/config", "/config_login": "/config",
-              "/control": "/"}
+NAV_PARENT = {"/v1/stats": "/insights", "/log": "/config", "/v1/config": "/config", "/control": "/"}
 
 
 def add_header(el, pathname="/"):
     """Compact top bar plus a bottom tab bar on phones; on wider screens the tabs move into the top bar."""
-    active = NAV_PARENT.get(pathname, pathname)
 
-    def nav_links(class_name):
+    def nav_links(class_name, items, active):
         return [dcc.Link([html.I(className=f"bi {icon}"), html.Span(label)],
                          href=dash_app.get_relative_path(path),
                          className=class_name + (" active" if active == path else ""))
-                for path, icon, label in NAV_ITEMS]
+                for path, icon, label in items]
 
+    desktop_active = pathname if pathname == "/v1/stats" else NAV_PARENT.get(pathname, pathname)
+    phone_active = NAV_PARENT.get(pathname, pathname)
     version = "v" + __version__
     github_url = "https://github.com/flobz/psa_car_controller/releases/tag/" + version
     top_bar = html.Header([
         dcc.Link("PSA Car Controller", href=dash_app.get_relative_path("/"), className="app-title"),
-        html.Nav(nav_links("top-nav-link"), className="top-nav d-none d-md-flex"),
+        html.Nav(nav_links("top-nav-link", DESKTOP_NAV_ITEMS, desktop_active),
+                 className="top-nav d-none d-md-flex"),
         html.A(version, href=github_url, target="_blank", rel="noopener",
                className="app-version d-none d-md-inline"),
     ], className="app-bar")
-    bottom_bar = html.Nav(nav_links("bottom-nav-link"), className="bottom-nav d-md-none")
+    bottom_bar = html.Nav(nav_links("bottom-nav-link", NAV_ITEMS, phone_active),
+                          className="bottom-nav d-md-none")
     return top_bar, html.Main(el, className="app-main"), bottom_bar
 
 
@@ -95,19 +102,22 @@ def display_page(pathname, search):
     pathname = pathname[len(prefix) - 1:]
     query_params = parse_qs(urlparse(search).query)
     no_header = query_params.get("header", None) == ["false"]
+    # old addresses keep working for bookmarks: /stats, /config_login, /config_otp
+    pathname = {"/stats": "/v1/stats", "/config_login": "/config", "/config_otp": "/config"}.get(pathname, pathname)
     if pathname == "/config_connect":
         page = get_oauth_config_layout(query_params["url"][0])
-    elif not APP.is_good or pathname == "/config_login":
-        page = config_layout("login")
+    elif not APP.is_good and pathname not in ("/v1/config", "/log"):
+        pathname = "/config"
+        page = get_settings_layout()
     elif pathname == "/config":
+        page = get_settings_layout()
+    elif pathname == "/v1/config":
         page = config_layout()
     elif pathname == "/log":
-        page = log_layout()
-    elif pathname == "/config_otp":
-        page = config_layout("otp")
+        page = get_log_layout()
     elif pathname == "/control":
         page = get_control_tabs(APP)
-    elif pathname == "/stats":
+    elif pathname == "/v1/stats":
         page = serve_layout()
     elif pathname == "/charge":
         page = get_charge_layout()
@@ -413,5 +423,14 @@ except (IndexError, TypeError, AttributeError):
 dash_app.layout = dbc.Container(fluid=True, children=[dcc.Location(id='url', refresh=False),
                                                       html.Div(id='page-content'),
                                                       pending_store(),
+                                                      dcc.Store(id=THEME_STORE),
                                                       ui.toast()],
                                 className="app-root")
+
+# light/dark follows the page: the classic /v1/ pages stay light (see THEME_SCRIPT in app.py)
+dash_app.clientside_callback(
+    """function (pathname) {
+        if (window.psaccApplyTheme) { window.psaccApplyTheme() }
+        return window.dash_clientside.no_update
+    }""",
+    Output(THEME_STORE, "data"), Input("url", "pathname"))
