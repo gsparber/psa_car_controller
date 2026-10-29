@@ -1,6 +1,8 @@
 import logging
 
-from flask import jsonify, request, Response as FlaskResponse
+import os
+
+from flask import abort, jsonify, request, send_file, Response as FlaskResponse
 from pydantic import BaseModel
 
 from psa_car_controller.common.utils import RateLimitException, validate_preconditioning_programs
@@ -12,6 +14,7 @@ from psa_car_controller.psacc.model.car import Cars
 from psa_car_controller.psacc.repository.trips import Trips
 
 from psa_car_controller.psacc.application.charging import Charging
+from psa_car_controller.psacc.application.vehicle_picture import get_vehicle_picture
 
 import json
 
@@ -239,3 +242,23 @@ def settings():
 def db(vin: str):
     soh = Database.get_last_soh_by_vin(vin)
     return jsonify({"soh": soh})
+
+
+@app.route('/vehicle_picture/<string:vin>')
+def vehicle_picture(vin):
+    if APP.myp.vehicles_list.get_car_by_vin(vin) is None:
+        abort(404)
+    pictures = get_vehicle_picture(APP.myp)
+    path = pictures.get_cached(vin) or pictures.fetch(vin)
+    if path is None:
+        abort(404)
+    return send_file(os.path.abspath(path), max_age=7 * 24 * 3600)
+
+
+# The service worker must be served from the app root, its scope can't be wider than its own path
+@app.route('/sw.js')
+def service_worker():
+    response = send_file(os.path.join(os.path.dirname(__file__), "..", "static", "sw.js"),
+                         mimetype="text/javascript", max_age=0)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
