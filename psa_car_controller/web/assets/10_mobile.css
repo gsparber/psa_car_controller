@@ -1,0 +1,382 @@
+/* App shell: compact top bar, bottom tab bar on phones, safe areas for installed PWA */
+:root {
+  --app-bar-height: 3.25rem;
+  --bottom-nav-height: 3.75rem;
+  --tile-radius: 1rem;
+}
+
+body {
+  background: var(--bs-tertiary-bg);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app-root {
+  min-height: 100dvh;
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+}
+
+.app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1020;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  min-height: var(--app-bar-height);
+  margin: 0 calc(-1 * max(0.75rem, env(safe-area-inset-right))) 0.75rem;
+  padding: env(safe-area-inset-top) max(0.75rem, env(safe-area-inset-right)) 0;
+  background: var(--bs-body-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.app-title {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--bs-body-color);
+  text-decoration: none;
+}
+
+.app-version {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--bs-secondary-color);
+}
+
+.top-nav {
+  gap: 0.25rem;
+}
+
+.top-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--bs-secondary-color);
+  text-decoration: none;
+}
+
+.top-nav-link.active,
+.top-nav-link:hover {
+  color: var(--bs-primary);
+  background: var(--bs-primary-bg-subtle);
+}
+
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1030;
+  display: flex;
+  height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--bs-body-bg);
+  border-top: 1px solid var(--bs-border-color);
+}
+
+.bottom-nav-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+  text-decoration: none;
+}
+
+.bottom-nav-link .bi {
+  font-size: 1.3rem;
+}
+
+.bottom-nav-link span {
+  font-size: 0.7rem;
+}
+
+.bottom-nav-link.active {
+  color: var(--bs-primary);
+}
+
+@media (max-width: 767.98px) {
+  .app-main {
+    padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 1rem);
+  }
+}
+
+/* Pages */
+.page {
+  max-width: 34rem;
+  margin: 0 auto;
+}
+
+.page-title {
+  margin: 0.25rem 0 1rem;
+}
+
+.page-section {
+  margin-top: 1.5rem;
+}
+
+.section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--bs-secondary-color);
+  margin: 0 0 0.5rem;
+}
+
+.card-block {
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: var(--tile-radius);
+  background: var(--bs-body-bg);
+}
+
+.big-button {
+  min-height: 3rem;
+  border-radius: 0.75rem;
+  font-weight: 600;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+@media (min-width: 576px) {
+  .stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.stat-tile {
+  padding: 0.75rem;
+  border-radius: var(--tile-radius);
+  background: var(--bs-body-bg);
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--bs-secondary-color);
+}
+
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.stat-unit {
+  margin-left: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--bs-secondary-color);
+}
+
+.mini-chart {
+  padding: 0.25rem;
+  border-radius: var(--tile-radius);
+  background: var(--bs-body-bg);
+}
+
+.period-chips,
+.day-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.period-chips .form-check,
+.day-chips .form-check {
+  padding: 0;
+  margin: 0;
+}
+
+.day-chips .btn {
+  min-width: 2.6rem;
+}
+
+/* Home */
+.hero-visual.with-picture {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.car-picture {
+  width: 100%;
+  max-height: 11rem;
+  object-fit: contain;
+}
+
+.hero-visual.with-picture .soc-ring {
+  width: min(36vw, 9rem);
+}
+
+.hero-visual.with-picture .soc-value {
+  font-size: 1.8rem;
+}
+
+.home-hero {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--tile-radius);
+  background: var(--bs-body-bg);
+}
+
+.soc-ring {
+  --soc: 0;
+  width: min(60vw, 13rem);
+  aspect-ratio: 1;
+  margin: 1rem auto;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--bs-success) calc(var(--soc) * 1%), var(--bs-secondary-bg) 0);
+}
+
+.soc-inner {
+  width: 82%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bs-body-bg);
+}
+
+.soc-value {
+  font-size: 2.6rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.soc-range {
+  color: var(--bs-secondary-color);
+}
+
+.charging-line {
+  font-weight: 500;
+  color: var(--bs-success-text-emphasis);
+}
+
+.home-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.home-tile.btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 6.5rem;
+  padding: 0.9rem;
+  text-align: left;
+  border: 0;
+  border-radius: var(--tile-radius);
+  background: var(--bs-body-bg);
+}
+
+.home-tile.active {
+  color: #fff;
+  background: var(--bs-primary);
+}
+
+.home-tile .tile-icon {
+  font-size: 1.5rem;
+  margin-bottom: auto;
+}
+
+.home-tile .tile-title {
+  font-weight: 600;
+}
+
+.home-tile .tile-sub {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.home-info .list-group-item {
+  min-height: 3rem;
+}
+
+.home-info {
+  border-radius: var(--tile-radius);
+  overflow: hidden;
+}
+
+.app-toast {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 0.75rem);
+  z-index: 1040;
+  width: min(22rem, calc(100vw - 2rem));
+}
+
+/* Summary cards on the stats page: two per row on phones instead of one oversized card */
+@media (max-width: 575.98px) {
+  #summary-cards > div {
+    flex: 0 0 50%;
+    max-width: 50%;
+  }
+
+  #summary-cards .card-title {
+    font-size: 1rem;
+  }
+
+  #summary-cards .card-body {
+    font-size: 120% !important;
+    white-space: normal !important;
+    padding: 0.25rem;
+  }
+
+  #summary-cards .card-img {
+    display: none;
+  }
+}
+
+/* Shown by pwa.js while the server can't be reached */
+.offline-banner {
+  display: none;
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + var(--app-bar-height) + 0.5rem);
+  white-space: nowrap;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1035;
+  padding: 0.35rem 0.9rem;
+  border-radius: 1rem;
+  font-size: 0.85rem;
+  color: #fff;
+  background: var(--bs-gray-700);
+}
+
+.app-offline .offline-banner {
+  display: block;
+}
+
+@media (min-width: 768px) {
+  .app-toast {
+    bottom: 1.5rem;
+  }
+}
+
+/* Commands can't reach the car without the server */
+.app-offline .home-tile,
+.app-offline .big-button,
+.app-offline #climate-save,
+.app-offline #charge-save {
+  pointer-events: none;
+  opacity: 0.5;
+}

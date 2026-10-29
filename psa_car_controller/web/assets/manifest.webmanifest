@@ -1,0 +1,19 @@
+{
+  "name": "PSA Car Controller",
+  "short_name": "PSACC",
+  "description": "Status and remote control for your Peugeot, Citroën, DS, Opel or Vauxhall",
+  "start_url": "../",
+  "scope": "../",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8f9fa",
+  "theme_color": "#f8f9fa",
+  "icons": [
+    {"src": "images/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "images/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Stats", "url": "../stats", "icons": [{"src": "images/icon-192.png", "sizes": "192x192"}]}
+  ]
+}

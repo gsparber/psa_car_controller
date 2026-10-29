@@ -29,6 +29,12 @@ from psa_car_controller.web.view.config_views import log_layout, config_layout
 # pylint: disable=invalid-name
 from psa_car_controller.web.tools.figurefilter import FigureFilter
 from psa_car_controller.web.view.control import get_control_tabs
+from psa_car_controller.web.view.home import get_home_layout
+from psa_car_controller.web.view.charge import get_charge_layout
+from psa_car_controller.web.view.climate import get_climate_layout
+from psa_car_controller.web.view.insights import get_insights_layout, set_trips_provider
+from psa_car_controller.web.view.car_access import pending_store
+from psa_car_controller.web.view import ui
 
 from psa_car_controller import __version__
 from psa_car_controller.web.view import api  # pylint: disable=unused-import
@@ -42,30 +48,43 @@ trips: Trips = Trips()
 chargings: List[dict]
 min_date = max_date = min_millis = max_millis = step = marks = cached_layout = None
 APP = PSACarController()
+set_trips_provider(lambda: trips)
 
 
 def get_default_car() -> Car:
     return APP.myp.vehicles_list[0]
 
 
-def add_header(el):
+NAV_ITEMS = [("/", "bi-car-front-fill", "Car"),
+             ("/charge", "bi-ev-station-fill", "Charge"),
+             ("/climate", "bi-snow", "Climate"),
+             ("/insights", "bi-bar-chart-line-fill", "Insights"),
+             ("/config", "bi-gear-fill", "Settings")]
+# Pages without their own tab highlight the closest one
+NAV_PARENT = {"/stats": "/insights", "/log": "/config", "/config_otp": "/config", "/config_login": "/config",
+              "/control": "/"}
+
+
+def add_header(el, pathname="/"):
+    """Compact top bar plus a bottom tab bar on phones; on wider screens the tabs move into the top bar."""
+    active = NAV_PARENT.get(pathname, pathname)
+
+    def nav_links(class_name):
+        return [dcc.Link([html.I(className=f"bi {icon}"), html.Span(label)],
+                         href=dash_app.get_relative_path(path),
+                         className=class_name + (" active" if active == path else ""))
+                for path, icon, label in NAV_ITEMS]
+
     version = "v" + __version__
     github_url = "https://github.com/flobz/psa_car_controller/releases/tag/" + version
-    dbc_version = dbc.Button(html.I(version, className="m-1"),
-                             size='sm',
-                             color="secondary",
-                             className="me-1 bi bi-github",
-                             external_link=True, href=github_url)
-    return dbc.Row([dbc.Col(dcc.Link(html.H1('My car info'), href=dash_app.get_relative_path("/"),
-                                     style={"TextDecoration": "none"})),
-                    dbc.Col(html.Div([dbc_version,
-                                      dcc.Link(
-                                          html.Img(src=dash_app.get_asset_url("images/settings.svg"),
-                                                   width="30veh"),
-                                          href=dash_app.get_relative_path("/config"),
-                                          className="float-end")],
-                                     className="d-grid gap-2 d-md-flex justify-content-md-end",))],
-                   className='align-items-center'), el
+    top_bar = html.Header([
+        dcc.Link("PSA Car Controller", href=dash_app.get_relative_path("/"), className="app-title"),
+        html.Nav(nav_links("top-nav-link"), className="top-nav d-none d-md-flex"),
+        html.A(version, href=github_url, target="_blank", rel="noopener",
+               className="app-version d-none d-md-inline"),
+    ], className="app-bar")
+    bottom_bar = html.Nav(nav_links("bottom-nav-link"), className="bottom-nav d-md-none")
+    return top_bar, html.Main(el, className="app-main"), bottom_bar
 
 
 @dash_app.callback(Output('page-content', 'children'),
@@ -88,11 +107,20 @@ def display_page(pathname, search):
         page = config_layout("otp")
     elif pathname == "/control":
         page = get_control_tabs(APP)
-    else:
+    elif pathname == "/stats":
         page = serve_layout()
+    elif pathname == "/charge":
+        page = get_charge_layout()
+    elif pathname == "/climate":
+        page = get_climate_layout()
+    elif pathname == "/insights":
+        page = get_insights_layout()
+    else:
+        pathname = "/"
+        page = get_home_layout()
     if no_header:
         return page
-    return add_header(page)
+    return add_header(page, pathname)
 
 
 def create_callback():  # noqa: MC0001
@@ -361,13 +389,7 @@ def serve_layout():
                                 size="xl",
                             )
                             ]),
-                    dbc.Tab(label="Map", tab_id="map", children=[maps]),
-                    dbc.Tab(label="Control", tab_id="control", children=html.Iframe(
-                        src=dash_app.config.requests_pathname_prefix + "control?header=false",
-                        style={"position": "absolute",
-                               "height": "100%",
-                               "width": "100%",
-                               "border": "none"}))
+                    dbc.Tab(label="Map", tab_id="map", children=[maps])
                 ],
                     id="tabs",
                     active_tab="summary",
@@ -389,5 +411,7 @@ except (IndexError, TypeError, AttributeError):
     logger.error("Failed to get trips, there is probably not enough data yet:", exc_info=True)
 
 dash_app.layout = dbc.Container(fluid=True, children=[dcc.Location(id='url', refresh=False),
-                                                      html.Div(id='page-content')],
-                                style={"height": "100vh"})
+                                                      html.Div(id='page-content'),
+                                                      pending_store(),
+                                                      ui.toast()],
+                                className="app-root")
