@@ -253,3 +253,12 @@ def vehicle_picture(vin):
     if path is None:
         abort(404)
     return send_file(os.path.abspath(path), max_age=7 * 24 * 3600)
+
+
+# The service worker must be served from the app root, its scope can't be wider than its own path
+@app.route('/sw.js')
+def service_worker():
+    response = send_file(os.path.join(os.path.dirname(__file__), "..", "static", "sw.js"),
+                         mimetype="text/javascript", max_age=0)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
