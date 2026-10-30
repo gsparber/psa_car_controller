@@ -631,23 +631,27 @@ class TestUnit(unittest.TestCase):
                 shutil.copyfileobj(compressed, apk)
             apk_parser = ApkParser("mypeugeot.apk", "FR")
             apk_parser.retrieve_content_from_apk()
-            self.assertRegex(apk_parser.host_brandid_prod, "^https?://")
-            self.assertRegex(apk_parser.culture, "^[a-z]{2}_[A-Z]{2}$")
-            self.assertEqual("AP_FR_ESP", apk_parser.site_code)
-            for value in (apk_parser.client_id, apk_parser.client_secret, apk_parser.version):
-                self.assertIsInstance(value, str)
-                self.assertTrue(value)
-            with open("certs/private.pem", "rb") as f:
-                self.assertIsNotNone(load_pem_private_key(f.read(), None))
-            with open("certs/public.pem", "rb") as f:
-                self.assertIsNotNone(load_pem_x509_certificate(f.read()))
+            self.assert_real_apk_content(apk_parser)
+
+    def assert_real_apk_content(self, apk_parser):
+        self.assertRegex(apk_parser.host_brandid_prod, "^https?://")
+        self.assertRegex(apk_parser.culture, "^[a-z]{2}_[A-Z]{2}$")
+        self.assertEqual("AP_FR_ESP", apk_parser.site_code)
+        for value in (apk_parser.client_id, apk_parser.client_secret, apk_parser.version):
+            self.assertIsInstance(value, str)
+            self.assertTrue(value)
+        with open("certs/private.pem", "rb") as f:
+            self.assertIsNotNone(load_pem_private_key(f.read(), None))
+        with open("certs/public.pem", "rb") as f:
+            self.assertIsNotNone(load_pem_x509_certificate(f.read()))
 
     def test_parse_apk_online(self):
+        """Run every night by .github/workflows/apk-format.yml, to notice a new format of the published application."""
         if not self.test_online:
             self.skipTest("set TEST_ONLINE=1 to use github.com/flobz/psa_apk")
         filename = "mypeugeot.apk"
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
-            assert get_content_from_apk(filename, "FR")
+            self.assert_real_apk_content(get_content_from_apk(filename, "FR"))
             assert github_file_need_to_be_downloaded(GITHUB_USER, GITHUB_REPO, "", filename + ".bz2") is False
 
     def test_file_need_to_be_updated(self):

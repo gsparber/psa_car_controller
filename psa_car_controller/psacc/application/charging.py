@@ -106,7 +106,9 @@ class Charging:
     def update_chargings(conn, charge: Charge, car):
         Charging.set_charge_price(charge, conn, car)
         Database.update_charge(charge)
-        Database.clean_battery(conn)
+        with conn.write_lock:
+            Database.clean_battery(conn)
+            conn.commit()
 
     @staticmethod
     def is_charge_ended(charge: 'Charge'):
@@ -120,27 +122,29 @@ class Charging:
         charge_date = charge_date.replace(microsecond=0)
         if charging_status == "InProgress":
             last_charge = Database.get_last_charge(car.vin)
-            if Charging.is_charge_ended(last_charge):
+            with conn.write_lock:
+                if Charging.is_charge_ended(last_charge):
+                    try:
+                        conn.execute(
+                            "INSERT INTO battery(start_at,start_level,charging_mode,VIN,mileage) VALUES(?,?,?,?,?)",
+                            (charge_date,
+                             level,
+                             charging_mode,
+                             car.vin,
+                             mileage))
+                    except IntegrityError:
+                        logger.debug("battery record already stored")
+                    start_at = charge_date
+                else:
+                    start_at = last_charge.start_at
                 try:
                     conn.execute(
-                        "INSERT INTO battery(start_at,start_level,charging_mode,VIN,mileage) VALUES(?,?,?,?,?)",
-                        (charge_date,
-                         level,
-                         charging_mode,
-                         car.vin,
-                         mileage))
+                        "INSERT INTO battery_curve(start_at,VIN,date,level,rate,autonomy) VALUES(?,?,?,?,?,?)",
+                        (start_at, car.vin, charge_date, level, charging_rate, autonomy))
                 except IntegrityError:
-                    logger.debug("battery record already stored")
-                start_at = charge_date
-            else:
-                start_at = last_charge.start_at
-            try:
-                conn.execute(
-                    "INSERT INTO battery_curve(start_at,VIN,date,level,rate,autonomy) VALUES(?,?,?,?,?,?)",
-                    (start_at, car.vin, charge_date, level, charging_rate, autonomy))
-            except IntegrityError:
-                # todo add charging rate to unique constraint
-                logger.debug("level already stored")
+                    # todo add charging rate to unique constraint
+                    logger.debug("level already stored")
+                conn.commit()  # before the network request below, the charge doesn't wait for it
             Ecomix.get_data_from_co2_signal(latitude, longitude, country_code)
         else:
             try:
@@ -158,7 +162,6 @@ class Charging:
                 last_charge.stop_at = charge_date
                 last_charge.mileage = mileage
                 Charging.update_chargings(conn, last_charge, car)
-        conn.commit()
         conn.close()
 
     @staticmethod

@@ -9,7 +9,7 @@ from time import sleep
 import pytz
 
 from psa_car_controller.psa.constants import DISCONNECTED, INPROGRESS, FINISHED, STOPPED
-from psa_car_controller.common.utils import RateLimitException, parse_hour
+from psa_car_controller.common.utils import RateLimitException, atomic_write, parse_hour
 from .psa_client import PSAClient
 
 logger = logging.getLogger(__name__)
@@ -224,6 +224,7 @@ class ChargeControl:
 
 
 class ChargeControls(dict):
+    _save_lock = threading.Lock()
 
     def __init__(self, file_name="charge_config.json"):
         self.file_name = file_name
@@ -231,18 +232,18 @@ class ChargeControls(dict):
         self._config_hash = None
 
     def save_config(self, force=False):
-        chd = {}
-        charge_control: ChargeControl
-        for charge_control in self.values():
-            chd[charge_control.vin] = {"percentage_threshold": charge_control.percentage_threshold,
-                                       "stop_hour": charge_control.get_stop_hour()}
-        config_str = json.dumps(chd, sort_keys=True, indent=4).encode('utf-8')
-        new_hash = md5(config_str).hexdigest()
-        if force or self._config_hash != new_hash:
-            with open(self.file_name, "wb") as f:
-                f.write(config_str)
-            self._config_hash = new_hash
-            logger.info("save config change")
+        with self._save_lock:  # read and write in one go: a slower save must not put older values back
+            chd = {}
+            charge_control: ChargeControl
+            for charge_control in self.values():
+                chd[charge_control.vin] = {"percentage_threshold": charge_control.percentage_threshold,
+                                           "stop_hour": charge_control.get_stop_hour()}
+            config_str = json.dumps(chd, sort_keys=True, indent=4).encode('utf-8')
+            new_hash = md5(config_str).hexdigest()
+            if force or self._config_hash != new_hash:
+                atomic_write(self.file_name, config_str)
+                self._config_hash = new_hash
+                logger.info("save config change")
 
     @staticmethod
     def load_config(psacc: PSAClient, name="charge_config.json"):

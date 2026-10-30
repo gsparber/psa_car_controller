@@ -2,6 +2,8 @@
 
 Idea from upstream PR #1181 (imperial units), rebuilt for the mobile UI and its settings page."""
 import unittest
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from psa_car_controller.psacc.model.car import Car
@@ -154,6 +156,53 @@ class TestPagesUnits(unittest.TestCase):
         self.assertEqual(" km", _suffix(columns["distance"]))
         # the duration suffix must not leak into the distance column (shared Format object)
         self.assertEqual(" min", _suffix(columns["duration"]))
+
+    def test_mileage_is_no_money(self):
+        car = Car("VR3UHZKX", "vid", "Peugeot")
+        for unit in (units.KM, units.MI):
+            figures.UNIT = unit
+            figures.get_figures(car)
+            for table in (figures.table_fig, figures.battery_table):
+                columns = {col["id"]: col for col in table.columns}
+                mileage = columns["mileage"]["format"].to_plotly_json()
+                self.assertEqual(["", f" {unit}"], mileage["locale"]["symbol"])
+                self.assertEqual("$,.0f", mileage["specifier"])
+                self.assertEqual(f"mileage ({unit})", columns["mileage"]["name"])
+
+    def test_wide_tables_scroll_inside_not_the_page(self):
+        figures.get_figures(Car("VR3UHZKX", "vid", "Peugeot"))
+        for table in (figures.table_fig, figures.battery_table):
+            self.assertEqual("auto", table.style_table["overflowX"], table.id)
+
+    def test_no_table_column_falls_back_to_the_dollar_symbol(self):
+        figures.get_figures(Car("VR3UHZKX", "vid", "Peugeot"))
+        for table in (figures.table_fig, figures.battery_table):
+            for column in table.columns:
+                if "format" in column:
+                    # the "$" of a specifier is the locale symbol, without one the table shows a dollar
+                    fmt = column["format"].to_plotly_json()
+                    self.assertIn("symbol", fmt["locale"], f"{table.id}: {column['id']}")
+                    self.assertEqual("", fmt["locale"]["symbol"][0], f"{table.id}: {column['id']}")
+
+    def test_price_column_uses_the_configured_currency(self):
+        views = _view("views")
+        car = Car("VR3UHZKX", "vid", "Peugeot")
+        trip = MagicMock(car=car, start_at=datetime(2026, 10, 1, tzinfo=timezone.utc))
+        general = SimpleNamespace(currency="CHF", export_format="xlsx")
+        fake_app = SimpleNamespace(is_good=True, myp=SimpleNamespace(vehicles_list=[car]),
+                                   config=SimpleNamespace(General=general))
+        # as after a login at runtime: the figures are built before any layout was requested
+        with patch.object(views, "APP", fake_app), patch.object(views, "get_default_car", lambda: car), \
+                patch.object(views.Trips, "get_trips", lambda _: {car.vin: [trip]}), \
+                patch.object(views.Charging, "get_chargings", list), \
+                patch.object(figures, "CURRENCY", "€"), patch.object(figures, "EXPORT_FORMAT", "csv"), \
+                patch.multiple(views, create=True, trips=None, chargings=None, cached_layout=None, min_date=None,
+                               max_date=None, min_millis=None, max_millis=None, step=None, marks=None,
+                               cached_unit=views.cached_unit):
+            views._load_trips()  # pylint: disable=protected-access
+            columns = {col["id"]: col for col in figures.battery_table.columns}
+            self.assertEqual(" CHF", _suffix(columns["price"]))
+            self.assertEqual("xlsx", figures.battery_table.export_format)
 
 
 class TestSettingsUnits(unittest.TestCase):

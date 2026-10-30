@@ -1,0 +1,50 @@
+---
+# The other tests replace androguard and GitHub: this one notices when the application published
+# on github.com/flobz/psa_apk changes its format. It doesn't log in to any Stellantis server.
+name: apk format
+on:
+  schedule:
+    - cron: '37 3 * * *'
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk-format:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Set up python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.11
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Load cached venv
+        id: cached-poetry-dependencies
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          sudo apt-get install libblas3 liblapack3 liblapack-dev libblas-dev gfortran libatlas-base-dev
+          poetry config --local virtualenvs.in-project true
+          poetry install --no-interaction
+      - name: read the published application
+        env:
+          TEST_ONLINE: "1"
+          PSACC_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          source .venv/bin/activate
+          python -m unittest -v tests.test_unit.TestUnit.test_parse_apk_online 2>&1 | tee "$RUNNER_TEMP/result.txt"
+          # a skipped test exits with 0 too: it must not pass for a successful check
+          grep -qx OK "$RUNNER_TEMP/result.txt"

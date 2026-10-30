@@ -737,3 +737,17 @@ body {
   font-size: 0.75rem;
   background: var(--app-fill);
 }
+
+/* The date slider of /v1/stats has 11 marks (get_marks_from_start_end): only some of them fit on a small screen.
+   First, middle and last on a phone, every second one up to a laptop, also for the longer labels with an hour. */
+@media (max-width: 575.98px) {
+  #date-slider .dash-slider-mark:not(:nth-of-type(5n+1)) {
+    display: none;
+  }
+}
+
+@media (min-width: 576px) and (max-width: 991.98px) {
+  #date-slider .dash-slider-mark:nth-of-type(even) {
+    display: none;
+  }
+}

@@ -91,6 +91,17 @@ def _bucket(date, unit):
     return local.date().replace(day=1)
 
 
+def local_series(rows, value_key, period, divisor_key=None, now=None):
+    """What clientside.js needs to redo series() with the days of the browser, which aren't the ones of the server.
+    With divisor_key, the buckets hold value per 100 of divisor."""
+    rows = in_period(rows, period, now)
+    start = period_start(period, now) or min(row["start_at"] for row in rows)
+    return {"unit": PERIODS[period][2], "start": start.timestamp(), "per_100": divisor_key is not None,
+            "end": (now or datetime.now(timezone.utc)).timestamp(),
+            "rows": [[row["start_at"].timestamp(), _num(row[value_key]), _num(row[divisor_key]) if divisor_key else 0]
+                     for row in rows]}
+
+
 def series(rows, value_key, period, now=None):
     """Sum of value_key per day or month over the period, with empty buckets filled with 0."""
     unit = PERIODS[period][2]

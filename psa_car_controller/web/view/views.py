@@ -1,5 +1,5 @@
 from datetime import datetime
-from threading import Lock
+from threading import Lock, RLock, Thread
 from typing import List
 from urllib.parse import parse_qs, urlparse
 
@@ -23,11 +23,11 @@ from psa_car_controller.web import figures, units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.tools.utils import diff_dashtable, unix_time_millis, get_marks_from_start_end, create_card
-from psa_car_controller.web.view.config_oauth import get_oauth_config_layout
+from psa_car_controller.web.view.config_oauth import get_oauth_config_layout, oauth_link_missing
 from psa_car_controller.web.view.config_views import config_layout
 
 # pylint: disable=invalid-name
-from psa_car_controller.web.tools.figurefilter import FigureFilter
+from psa_car_controller.web.tools.figurefilter import FigureFilter, set_clientside_callback
 from psa_car_controller.web.view.control import get_control_tabs
 from psa_car_controller.web.view.home import get_home_layout
 from psa_car_controller.web.view.charge import get_charge_layout
@@ -38,14 +38,16 @@ from psa_car_controller.web.view.log import get_log_layout
 from psa_car_controller.web.view.car_access import command_status, pending_store
 from psa_car_controller.web.view import ui
 
-from psa_car_controller import __version__
 from psa_car_controller.web.view import api  # pylint: disable=unused-import
 
 logger = CustomLogger.getLogger(__name__)
 
 EMPTY_DIV = "empty-div"
 THEME_STORE = "app-theme"
-CALLBACK_CREATED = False
+# what the callback of /v1/stats fills, in the order FigureFilter gives them to it
+STATS_TABLES = ["trips-table", "battery-table"]
+STATS_GRAPHS = ["consumption_fig", "consumption_fig_by_speed", "consumption_graph_by_temp"]
+STATS_MAPS = ["trips_map"]
 
 trips: Trips = Trips()
 chargings: List[dict]
@@ -81,14 +83,14 @@ def add_header(el, pathname="/"):
 
     desktop_active = pathname if pathname == "/v1/stats" else NAV_PARENT.get(pathname, pathname)
     phone_active = NAV_PARENT.get(pathname, pathname)
-    version = "v" + __version__
-    github_url = "https://github.com/flobz/psa_car_controller/releases/tag/" + version
+    version, github_url = ui.version_info()
+    version_class = "app-version d-none d-md-inline"
     top_bar = html.Header([
         dcc.Link("PSA Car Controller", href=dash_app.get_relative_path("/"), className="app-title"),
         html.Nav(nav_links("top-nav-link", DESKTOP_NAV_ITEMS, desktop_active),
                  className="top-nav d-none d-md-flex"),
-        html.A(version, href=github_url, target="_blank", rel="noopener",
-               className="app-version d-none d-md-inline"),
+        html.A(version, href=github_url, target="_blank", rel="noopener", className=version_class) if github_url
+        else html.Span(version, className=version_class),
     ], className="app-bar")
     bottom_bar = html.Nav(nav_links("bottom-nav-link", NAV_ITEMS, phone_active),
                           className="bottom-nav d-md-none")
@@ -106,7 +108,7 @@ def display_page(pathname, search):
     # old addresses keep working for bookmarks: /stats, /config_login, /config_otp
     pathname = {"/stats": "/v1/stats", "/config_login": "/config", "/config_otp": "/config"}.get(pathname, pathname)
     if pathname == "/config_connect":
-        page = get_oauth_config_layout(query_params["url"][0])
+        page = get_oauth_config_layout(query_params["url"][0]) if "url" in query_params else oauth_link_missing()
     elif not APP.is_good and pathname not in ("/v1/config", "/log"):
         pathname = "/config"
         page = get_settings_layout()
@@ -135,96 +137,103 @@ def display_page(pathname, search):
 
 
 def create_callback():  # noqa: MC0001
-    global CALLBACK_CREATED
-    if not CALLBACK_CREATED:
-        @dash_app.callback(Output(EMPTY_DIV, "children"),
-                           [Input("battery-table", "data_timestamp")],
-                           [State("battery-table", "data"),
-                            State("battery-table", "data_previous")])
-        def capture_diffs_in_battery_table(timestamp, data, data_previous):
-            if timestamp is None:
-                raise PreventUpdate
-            diff_data = diff_dashtable(data, data_previous, "start_at")
-            for changed_line in diff_data:
-                if changed_line['column_name'] == 'price':
-                    conn = Database.get_db()
-                    charge = Charge(datetime.utcfromtimestamp(changed_line['start_at'] / 1000))
-                    charge.price = changed_line['current_value']
-                    if APP.myp.vehicles_list:
-                        charge.vin = get_default_car().vin
-                    if not Database.set_chargings_price(conn, charge):
-                        logger.error("Can't find line to update in the database")
-                    else:
-                        logger.debug("update price %s of %s", changed_line['current_value'], changed_line['start_at'])
-                    conn.close()
-            return ""  # don't need to update dashboard
+    set_clientside_callback(dash_app, STATS_TABLES, STATS_GRAPHS + STATS_MAPS)
 
-        @dash_app.callback([Output("tab_battery_popup_graph", "children"), Output("tab_battery_popup", "is_open")],
-                           [Input("battery-table", "active_cell"),
-                            Input("tab_battery_popup-close", "n_clicks")],
-                           [State('battery-table', 'data'),
-                            State("tab_battery_popup", "is_open")])
-        def get_battery_curve(active_cell, close, data, is_open):  # pylint: disable=unused-argument
-            if is_open is None:
-                is_open = False
-            if active_cell is not None and active_cell["column_id"] in ["start_level", "end_level"] and not is_open:
-                row = data[active_cell["row"]]
+    @dash_app.callback(Output(EMPTY_DIV, "children"),
+                       [Input("battery-table", "data_timestamp")],
+                       [State("battery-table", "data"),
+                        State("battery-table", "data_previous")])
+    def capture_diffs_in_battery_table(timestamp, data, data_previous):
+        if timestamp is None:
+            raise PreventUpdate
+        diff_data = diff_dashtable(data, data_previous, "start_at")
+        for changed_line in diff_data:
+            if changed_line['column_name'] == 'price':
+                conn = Database.get_db()
+                charge = Charge(datetime.utcfromtimestamp(changed_line['start_at'] / 1000))
+                charge.price = changed_line['current_value']
                 if APP.myp.vehicles_list:
-                    return figures.get_battery_curve_fig(row, APP.myp.vehicles_list[0]), True
-            return "", False
+                    charge.vin = get_default_car().vin
+                if not Database.set_chargings_price(conn, charge):
+                    logger.error("Can't find line to update in the database")
+                else:
+                    logger.debug("update price %s of %s", changed_line['current_value'], changed_line['start_at'])
+                conn.close()
+        return ""  # don't need to update dashboard
 
-        @dash_app.callback([Output("tab_trips_popup_graph", "children"), Output("tab_trips_popup", "is_open"), ],
-                           [Input("trips-table", "active_cell"),
-                            Input("tab_trips_popup-close", "n_clicks")],
-                           State("tab_trips_popup", "is_open"))
-        def get_altitude_graph(active_cell, close, is_open):  # pylint: disable=unused-argument
-            if is_open is None:
-                is_open = False
-            if active_cell is not None and active_cell["column_id"] in ["altitude_diff"] and not is_open:
-                return figures.get_altitude_fig(trips[active_cell["row_id"] - 1]), True
-            return "", False
+    @dash_app.callback([Output("tab_battery_popup_graph", "children"), Output("tab_battery_popup", "is_open")],
+                       [Input("battery-table", "active_cell"),
+                        Input("tab_battery_popup-close", "n_clicks")],
+                       [State('battery-table', 'data'),
+                        State("tab_battery_popup", "is_open")])
+    def get_battery_curve(active_cell, close, data, is_open):  # pylint: disable=unused-argument
+        if is_open is None:
+            is_open = False
+        if active_cell is not None and active_cell["column_id"] in ["start_level", "end_level"] and not is_open:
+            row = data[active_cell["row"]]
+            if APP.myp.vehicles_list:
+                return figures.get_battery_curve_fig(row, APP.myp.vehicles_list[0]), True
+        return "", False
 
-        @dash_app.callback(Output("loading-output-trips", "children"), Input("export-trips-table", "n_clicks"))
-        def export_trips_loading_animation(n_clicks):  # pylint: disable=unused-argument
-            time.sleep(3)
+    @dash_app.callback([Output("tab_trips_popup_graph", "children"), Output("tab_trips_popup", "is_open"), ],
+                       [Input("trips-table", "active_cell"),
+                        Input("tab_trips_popup-close", "n_clicks")],
+                       State("tab_trips_popup", "is_open"))
+    def get_altitude_graph(active_cell, close, is_open):  # pylint: disable=unused-argument
+        if is_open is None:
+            is_open = False
+        if active_cell is not None and active_cell["column_id"] in ["altitude_diff"] and not is_open:
+            return figures.get_altitude_fig(trips[active_cell["row_id"] - 1]), True
+        return "", False
 
-        @dash_app.callback(Output("loading-output-battery", "children"), Input("export-battery-table", "n_clicks"))
-        def export_batt_loading_animation(n_clicks):  # pylint: disable=unused-argument
-            time.sleep(3)
-        # Emulate click on original Export datatables button, since original button is hard to modify
-        dash_app.clientside_callback(
-            """
-            function(n_clicks) {
-                if (n_clicks > 0)
-                    document.querySelector("#trips-table button.export").click()
-                return ""
-            }
-            """,
-            Output("trips-table", "data-dummy"),
-            [Input("export-trips-table", "n_clicks")]
-        )
-        dash_app.clientside_callback(
-            """
-            function(n_clicks) {
-                if (n_clicks > 0)
-                    document.querySelector("#battery-table button.export").click()
-                return ""
-            }
-            """,
-            Output("battery-table", "data-dummy"),
-            [Input("export-battery-table", "n_clicks")]
-        )
+    @dash_app.callback(Output("loading-output-trips", "children"), Input("export-trips-table", "n_clicks"))
+    def export_trips_loading_animation(n_clicks):  # pylint: disable=unused-argument
+        time.sleep(3)
 
-        CALLBACK_CREATED = True
+    @dash_app.callback(Output("loading-output-battery", "children"), Input("export-battery-table", "n_clicks"))
+    def export_batt_loading_animation(n_clicks):  # pylint: disable=unused-argument
+        time.sleep(3)
+    # Emulate click on original Export datatables button, since original button is hard to modify
+    dash_app.clientside_callback(
+        """
+        function(n_clicks) {
+            if (n_clicks > 0)
+                document.querySelector("#trips-table button.export").click()
+            return ""
+        }
+        """,
+        Output("trips-table", "data-dummy"),
+        [Input("export-trips-table", "n_clicks")]
+    )
+    dash_app.clientside_callback(
+        """
+        function(n_clicks) {
+            if (n_clicks > 0)
+                document.querySelector("#battery-table button.export").click()
+            return ""
+        }
+        """,
+        Output("battery-table", "data-dummy"),
+        [Input("export-battery-table", "n_clicks")]
+    )
+    dash_app.clientside_callback("function(_, marks) { return localSliderMarks(marks) }",
+                                 Output("date-slider", "marks"),
+                                 Input("clientside-data-store", "data"),
+                                 State("date-slider", "marks"))
 
 
 no_concurrent_update_trip = Lock()
+# The trips, the figures and the layout built from them belong together: requests and update_trips change them.
+# Never wait for DATA_READY or the network while holding it, update_trips needs it to get there.
+figures_lock = RLock()
 DATA_READY = False
+# How long a page waits for the trips. Missing altitudes come from the network 100 points per second, it can be long.
+TRIPS_WAIT_STEP = 0.2
+TRIPS_WAIT_STEPS = 100
 
 
 def update_trips():
-    global trips, chargings, cached_layout, cached_unit, min_date, max_date, min_millis, max_millis, step, marks, \
-        DATA_READY
+    global DATA_READY
     # we allow on thread waiting for no_concurrent_update_trip lock
     with utils.nonblocking(no_concurrent_update_trip) as locked:
         if not locked:
@@ -234,49 +243,59 @@ def update_trips():
             logger.info("update_trips")
             conn = Database.get_db()
             Database.add_altitude_to_db(conn)
-            min_date = None
-            max_date = None
-            cached_unit = figures.UNIT = units.current()
-            if APP.is_good and APP.myp.vehicles_list:
-                car = get_default_car()  # todo handle multiple car
-                try:
-                    trips_by_vin = Trips.get_trips(Cars([car]))
-                    trips = trips_by_vin[car.vin]
-                    if len(trips) > 0:
-                        min_date = trips[0].start_at
-                        max_date = trips[-1].start_at
-                        figures.get_figures(trips[0].car)
-                except (KeyError, IndexError):
-                    logger.info("No trips yet")
-                chargings = Charging.get_chargings()
-                if len(chargings) == 0:
-                    logger.info("No chargings yet")
-                    if min_date is None:
-                        return
-                else:
-                    if min_date:
-                        min_date = min(min_date, chargings[0]["start_at"])
-                        max_date = max(max_date, chargings[-1]["start_at"])
-                    else:
-                        min_date = chargings[0]["start_at"]
-                        max_date = chargings[-1]["start_at"]
-                # update for slider
-                try:
-                    logger.debug("min_date:%s - max_date:%s", min_date, max_date)
-                    min_millis = unix_time_millis(min_date)
-                    max_millis = unix_time_millis(max_date)
-                    step = (max_millis - min_millis) / 100
-                    marks = get_marks_from_start_end(min_date, max_date)
-                    cached_layout = None  # force regenerate layout
-                    figures.get_figures(car)
-                except (ValueError, IndexError):
-                    logger.error("update_trips (slider): %s", exc_info=True)
-                except AttributeError:
-                    logger.debug("position table is probably empty :", exc_info=True)
+            with figures_lock:
+                _load_trips()
         finally:
-            DATA_READY = True
+            # without a login there is nothing to load yet: the first page after it has to do that
+            DATA_READY = APP.is_good
         logger.debug("trips updated !")
         return
+
+
+def _load_trips():
+    global trips, chargings, cached_layout, cached_unit, min_date, max_date, min_millis, max_millis, step, marks
+    min_date = None
+    max_date = None
+    cached_unit = figures.UNIT = units.current()
+    if APP.is_good and APP.myp.vehicles_list:
+        # the tables below show them: when the login happens after the start, nothing has set them yet
+        figures.CURRENCY = APP.config.General.currency
+        figures.EXPORT_FORMAT = APP.config.General.export_format
+        car = get_default_car()  # todo handle multiple car
+        try:
+            trips_by_vin = Trips.get_trips(Cars([car]))
+            trips = trips_by_vin[car.vin]
+            if len(trips) > 0:
+                min_date = trips[0].start_at
+                max_date = trips[-1].start_at
+                figures.get_figures(trips[0].car)
+        except (KeyError, IndexError):
+            logger.info("No trips yet")
+        chargings = Charging.get_chargings()
+        if len(chargings) == 0:
+            logger.info("No chargings yet")
+            if min_date is None:
+                return
+        else:
+            if min_date:
+                min_date = min(min_date, chargings[0]["start_at"])
+                max_date = max(max_date, chargings[-1]["start_at"])
+            else:
+                min_date = chargings[0]["start_at"]
+                max_date = chargings[-1]["start_at"]
+        # update for slider
+        try:
+            logger.debug("min_date:%s - max_date:%s", min_date, max_date)
+            min_millis = unix_time_millis(min_date)
+            max_millis = unix_time_millis(max_date)
+            step = (max_millis - min_millis) / 100
+            marks = get_marks_from_start_end(min_date, max_date)
+            cached_layout = None  # force regenerate layout
+            figures.get_figures(car)
+        except (ValueError, IndexError):
+            logger.error("update_trips (slider): %s", exc_info=True)
+        except AttributeError:
+            logger.debug("position table is probably empty :", exc_info=True)
 
 
 def _follow_unit_setting():
@@ -293,13 +312,30 @@ def _follow_unit_setting():
         logger.debug("Can't rebuild the figures for %s", unit, exc_info=True)
 
 
+def _trips_are_ready():
+    """The start loads the trips only with a working login. After a web login no one does until the database changes."""
+    if not DATA_READY:
+        # not in this thread: the altitudes can take longer than a page should wait
+        Thread(target=update_trips, name="update_trips", daemon=True).start()
+    for _ in range(TRIPS_WAIT_STEPS):
+        if DATA_READY:
+            return True
+        logger.debug("wait for trips data...")
+        time.sleep(TRIPS_WAIT_STEP)
+    return DATA_READY
+
+
 def serve_layout():
+    if not _trips_are_ready():
+        return dbc.Alert("The trips are still loading, reload this page in a moment.", color="info")
+    with figures_lock:
+        return _cached_or_new_layout()
+
+
+def _cached_or_new_layout():
     global cached_layout
     _follow_unit_setting()
     if cached_layout is None:
-        while not DATA_READY:
-            logger.debug("wait for trips data...")
-            time.sleep(3)
         logger.debug("Create new layout")
         fig_filter = FigureFilter()
         try:
@@ -317,7 +353,7 @@ def serve_layout():
             summary_tab = [
                 dbc.Container(dbc.Row(id="summary-cards",
                                       children=create_card(figures.get_summary_cards())), fluid=True),
-                fig_filter.add_graph(dcc.Graph(id="consumption_fig"), "start_at", ["consumption_km"],
+                fig_filter.add_graph(dcc.Graph(id="consumption_fig"), "start_at_local", ["consumption_km"],
                                      figures.consumption_fig),
                 fig_filter.add_graph(dcc.Graph(id="consumption_fig_by_speed"), "speed_average",
                                      ["consumption_km"] * 2, figures.consumption_fig_by_speed),
@@ -332,17 +368,16 @@ def serve_layout():
             fig_filter.src = {"trips": units.convert_rows(trips.get_trips_as_dict(), cached_unit,
                                                           keep_km=("distance",)),
                               "chargings": units.convert_chargings(chargings, cached_unit)}
-            fig_filter.set_clientside_callback(dash_app, {"minimumLength": APP.config.General.minimum_trip_length})
-            create_callback()
+            if min_millis is None:
+                raise IndexError("no trips and no charges yet")
         except (IndexError, TypeError, NameError, AssertionError, NameError, AttributeError):
-            summary_tab = figures.ERROR_DIV
-            maps = figures.ERROR_DIV
             logger.warning("Failed to generate figure, there is probably not enough data yet", exc_info_debug=True)
-            range_slider = html.Div()
-            figures.battery_table = figures.ERROR_DIV
+            # nothing else: the callbacks of the tables can't run without them
+            cached_layout = figures.ERROR_DIV
+            return cached_layout
 
         data_div = html.Div([
-            *fig_filter.get_store(),
+            *fig_filter.get_store({"minimumLength": APP.config.General.minimum_trip_length}),
             html.Div([
                 dbc.Row(
                     children=range_slider,
@@ -432,6 +467,7 @@ def serve_layout():
     return cached_layout
 
 
+create_callback()
 try:
     if APP.is_good:
         Charging.set_default_price(APP.myp.vehicles_list)

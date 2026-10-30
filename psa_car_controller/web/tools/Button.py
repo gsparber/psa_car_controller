@@ -1,12 +1,17 @@
+import threading
+
 import dash_bootstrap_components as dbc
 from dash import html
 from dash._utils import create_callback_id
 from dash.dependencies import Output, Input
+from dash.exceptions import PreventUpdate
 
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.web.app import dash_app
 
 RESPONSE = "-response"
+RATE_LIMIT_MESSAGE = "Too many requests, try again later"
+REGISTER_LOCK = threading.Lock()
 
 
 class Button:
@@ -22,8 +27,9 @@ class Button:
         self._output = Output(self.get_response_id(), 'children')
         self.input_button = Input(self.get_button_id(), 'n_clicks')
         callback_id = create_callback_id(self._output, self.input_button)
-        if callback_id not in dash_app.callback_map:
-            self._set_callback(prevent_initial_call)
+        with REGISTER_LOCK:  # the page builds its buttons per request: a parallel one must not register them again
+            if callback_id not in dash_app.callback_map:
+                self._set_callback(prevent_initial_call)
 
     def _set_callback(self, prevent_initial_call):
         dash_app.callback(self._output, self.input_button,
@@ -40,9 +46,11 @@ class Button:
                                    className="w-100"),
                         html.Div(id=self.get_response_id())])
 
-    def call(self, value):  # pylint: disable=unused-argument
+    def call(self, value):
+        if not value:  # n_clicks is 0 or None without a click
+            raise PreventUpdate()
         try:
             self._fct(self._element_id)
         except RateLimitException:
-            return "Too many requests, try again later"
+            return RATE_LIMIT_MESSAGE
         return " "

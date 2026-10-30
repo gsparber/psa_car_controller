@@ -92,13 +92,13 @@ def _settings(car):
 
 
 def _charge_row(charge, currency):
-    start, stop = charge["start_at"].astimezone(), charge["stop_at"]
+    stop = charge["stop_at"]
     if stop:
         minutes = round((stop - charge["start_at"]).total_seconds() / 60)
-        when = f"{start:%a %d %b, %H:%M} · {minutes // 60} h {minutes % 60:02d}" if minutes >= 60 else \
-            f"{start:%a %d %b, %H:%M} · {minutes} min"
+        length = f"{minutes // 60} h {minutes % 60:02d}" if minutes >= 60 else f"{minutes} min"
     else:
-        when = f"{start:%a %d %b, %H:%M} · in progress"
+        length = "in progress"
+    when = [ui.local_datetime(charge["start_at"]), f" · {length}"]
     levels = f"{ui.fmt(charge['start_level'])} → {ui.fmt(charge['end_level'])} %"
     price = charge["price"]
     cost = f" · {ui.fmt(price, 2)} {currency}" if isinstance(price, (int, float)) else ""
@@ -113,13 +113,12 @@ def _charge_row(charge, currency):
 
 def _estimated_charge_row(charge):
     """Only the levels are known, and the dates frame the charge: no duration, no energy, no cost."""
-    start, stop = charge["start_at"].astimezone(), charge["stop_at"].astimezone()
     return html.Div([
         html.I(className="bi bi-battery-half me-3"),
         html.Div([html.Div(f"{ui.fmt(charge['start_level'])} → {ui.fmt(charge['end_level'])} %",
                            className="fw-semibold"),
-                  html.Small(f"Between {start:%a %d %b, %H:%M} and {stop:%a %d %b, %H:%M}",
-                             className="text-body-secondary")],
+                  html.Small(["Between ", ui.local_datetime(charge["start_at"]), " and ",
+                              ui.local_datetime(charge["stop_at"])], className="text-body-secondary")],
                  className="flex-grow-1"),
         html.Span("Estimated", className="badge text-bg-secondary ms-2",
                   title="Not recorded: the battery level rose between two trips"),

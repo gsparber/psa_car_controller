@@ -18,6 +18,7 @@ from psa_car_controller.psa.setup.github import urlretrieve_from_github
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.psa_client import PSAClient, DEFAULT_CONFIG_FILENAME
 from psa_car_controller.psacc.application.charge_control import ChargeControl, ChargeControls
+from psa_car_controller.psacc.model.car import describe_cars
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +283,7 @@ class InitialSetup:
                     car.label = vehicle["short_label"].split(" ")[-1]  # remove new, nouvelle, neu word....
         self.psacc.vehicles_list.save_cars()
 
-        logger.info("\nYour vehicles: %s", res)
+        logger.info("\nYour vehicles: %s", describe_cars(res))
 
         # Charge control: keep the settings of cars already configured, new cars start with charge control off
         charge_config_name = config_prefix + "charge_config.json"

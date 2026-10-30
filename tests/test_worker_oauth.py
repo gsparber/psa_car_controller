@@ -277,9 +277,7 @@ class TestLoginOrder(unittest.TestCase):
         self.setup.psacc.manager.generate_redirect_url.return_value = AUTH_URL
         self.setup.psacc.manager.redirect_uri = "mymop://oauth2redirect"
         self.config = SimpleNamespace(Login_Worker=SimpleNamespace(url=WORKER))
-        triggered = SimpleNamespace(triggered=[{"prop_id": "submit-form.n_clicks"}])
-        for name, target, new in (("context", "callback_context", triggered),
-                                  ("headless", "get_oauth_code_headless", None),
+        for name, target, new in (("headless", "get_oauth_code_headless", None),
                                   ("worker", "get_oauth_code_from_worker", None),
                                   ("initial_setup", "InitialSetup", MagicMock(return_value=self.setup))):
             patcher = patch.object(self.views, target, new) if new else patch.object(self.views, target)

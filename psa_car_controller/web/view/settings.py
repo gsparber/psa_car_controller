@@ -7,7 +7,6 @@ from dash import dcc, html
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from psa_car_controller import __version__
 from psa_car_controller.psa.constants import BRAND, realm_info
 from psa_car_controller.psa.oauth import rejected_grant_hint
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME
@@ -15,7 +14,7 @@ from psa_car_controller.web import units
 from psa_car_controller.psa.RemoteClient import TOKEN_ACCOUNT_FAILED, TOKEN_RATE_LIMITED, TOKEN_REMOTE_FAILED
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import ui
-from psa_car_controller.web.view.car_access import app, read
+from psa_car_controller.web.view.car_access import REMOTE_OFF_HINT, app, read
 from psa_car_controller.web.view.config_views import login_form, otp_form
 
 logger = logging.getLogger(__name__)
@@ -113,7 +112,7 @@ def _remote(state, error=None):
                                    html.Span("Remote control", className="flex-grow-1"),
                                    html.Span("Off", className="text-body-secondary")],
                                   className="list-group-item d-flex align-items-center"), className="list-group"),
-                html.Small("Started with --remote-disable or --offline.", className="text-body-secondary")]
+                html.Small(REMOTE_OFF_HINT, className="text-body-secondary")]
     if state == REMOTE_OK:
         return [html.Div(_status_row("bi-broadcast", "Remote control", "Connected", True), className="list-group")]
     if state == REMOTE_PAUSED:
@@ -172,12 +171,11 @@ def set_length_unit(unit):
 
 
 def _more():
-    version = "v" + __version__
+    version, url = ui.version_info()
     return ui.section("More", [html.Div([
         ui.link_row("bi-journal-text", "Log", dash_app.get_relative_path("/log")),
         ui.link_row("bi-sliders", "Advanced setup (classic)", dash_app.get_relative_path("/v1/config")),
-        ui.info_row("bi-github", "Version", version,
-                    href="https://github.com/flobz/psa_car_controller/releases/tag/" + version),
+        ui.info_row("bi-github", "Version", version, href=url),
     ], className="list-group")])
 
 

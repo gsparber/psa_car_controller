@@ -1,5 +1,6 @@
 import bz2
 import logging
+import os
 from hashlib import sha1
 from os import path
 
@@ -7,6 +8,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 TIMEOUT_IN_S = 20
+TOKEN_ENV = "PSACC_GITHUB_TOKEN"
 
 
 class GithubError(ConnectionError):
@@ -21,10 +23,20 @@ def _describe_refusal(res) -> str:
     return f"GitHub answered with HTTP {res.status_code}"
 
 
+def _api_headers() -> dict:
+    # optional, for the nightly CI run: runners share their IP address and so the limit of 60 requests per hour
+    token = os.environ.get(TOKEN_ENV, "").strip()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def get_github_sha_from_file(user, repo, directory, filename):
     try:
         res = requests.get("https://api.github.com/repos/{}/{}/git/trees/main:{}".format(user, repo, directory),
+                           headers=_api_headers(),
                            timeout=TIMEOUT_IN_S)
+    except requests.exceptions.InvalidHeader:
+        # requests writes the value of the header in this exception: it's neither logged nor chained
+        raise GithubError(f"{TOKEN_ENV} isn't a valid token") from None
     except requests.RequestException as e:
         logger.debug("can't reach the GitHub API", exc_info=True)
         raise GithubError("GitHub can't be reached") from e

@@ -13,7 +13,7 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import status_text, ui
-from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, \
+from psa_car_controller.web.view.car_access import PENDING_STORE, REMOTE_OFF_HINT, action_button, app, car_select, \
     command_supported, get_car, is_charging, is_pending, is_preconditioning, maintenance, read, remote_ready
 
 logger = logging.getLogger(__name__)
@@ -62,16 +62,25 @@ def _picture(car: Car):
     return None
 
 
+def _updated(updated_at, age_seconds):
+    """Time and age of the data ("updated 10:12 (5 min ago)"), None without a date."""
+    text = status_text.format_updated(updated_at)
+    if text is None:
+        return None
+    age = status_text.format_age(age_seconds)
+    return ["updated ", ui.local_time(updated_at, text, "updated"), f" ({age})" if age else ""]
+
+
 def _hero(car: Car, remote):
     elec = car.status.get_energy("Electric")
     fuel = car.status.get_energy("Fuel")
     unit = units.current()
     age = status_age_seconds(car.status)
-    updated = status_text.updated_text(status_updated_at(car.status), age)
+    updated = _updated(status_updated_at(car.status), age)
     state = status_text.car_state_text(read(lambda: car.status.ignition.type),
                                        read(car.status.is_moving),
                                        read(lambda: car.status.kinetic.speed), unit)
-    subtitle = " · ".join(filter(None, [state, updated]))
+    subtitle = [state, " · ", *updated] if state and updated else state or updated
     charging = None
     if car.has_battery():
         ring = _soc_ring(elec.level, elec.autonomy, unit)
@@ -124,6 +133,9 @@ def _tiles(car: Car, remote, pending):
         tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
                            pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
     actions = html.Div(tiles, className="home-tiles")
+    if not app().remote_control:
+        return html.Div([actions, html.Small("Remote control is off. " + REMOTE_OFF_HINT,
+                                             className="text-body-secondary")])
     if not remote:
         return html.Div([actions, html.Small(["Remote control is not set up. ",
                                               dcc.Link("Open settings", href=dash_app.get_relative_path("/config"))],
@@ -164,6 +176,8 @@ def _info(car: Car):
             html.I(className="bi bi-broadcast me-3"),
             html.Span("Send data to ABRP", className="flex-grow-1"),
             dbc.Switch(id=ABRP_SWITCH, value=car.vin in app().myp.abrp.abrp_enable_vin, className="mb-0"),
+            # next to the switch: with its output outside of what a poll replaces, Dash calls toggle_abrp on each poll
+            html.Div(id=ABRP_OUT, hidden=True),
         ], className="list-group-item d-flex align-items-center"))
     return html.Div(info, className="list-group home-info")
 
@@ -181,7 +195,6 @@ def get_home_layout():
         return dbc.Alert("No car found for this account.", color="warning")
     return html.Div([
         car_select(CAR_SELECT),
-        html.Div(id=ABRP_OUT, hidden=True),
         dcc.Interval(id=POLL, interval=POLL_MS),
         html.Div(render_status(cars[0]), id=STATUS_DIV),
     ], className="page")

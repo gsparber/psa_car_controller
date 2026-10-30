@@ -1,6 +1,8 @@
 import locale
 import logging
 import sys
+import threading
+from contextvars import ContextVar
 
 import dash_bootstrap_components as dbc
 from flask import Flask
@@ -8,6 +10,7 @@ from werkzeug import run_simple
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from dash import Dash
+from dash._utils import AttributeDict
 try:
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
 except ImportError:
@@ -56,9 +59,45 @@ THEME_SCRIPT = """<script>(function () {
       }())</script>"""
 
 
+_request_prefixes = ContextVar("psacc_request_prefixes", default=None)
+
+
+class RequestPrefixConfig(AttributeDict):
+    """Dash config whose path prefixes hold per request: the same app answers Home Assistant ingress and direct calls
+    (a sensor polling the API) at the same time, and the threads of the server must not see the prefix of each other.
+    Code outside of a request sees the prefix given at start."""
+
+    def set_request_prefixes(self, requests_pathname_prefix, url_base_pathname, assets_external_path):
+        _request_prefixes.set({"requests_pathname_prefix": requests_pathname_prefix,
+                               "url_base_pathname": url_base_pathname,
+                               "assets_external_path": assets_external_path})
+
+    def __getitem__(self, key):
+        prefixes = _request_prefixes.get()
+        if prefixes is not None and key in prefixes:
+            return prefixes[key]
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+
 class PwaDash(Dash):
     """Dash app that links the web app manifest and icons, so phones can install it to the home screen.
     Links go through get_asset_url so they follow the per request prefix (HA ingress, reverse proxy)."""
+
+    def __init__(self, *args, **kwargs):
+        self._setup_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+        self.config = RequestPrefixConfig(self.config)
+
+    def _setup_server(self):
+        # Dash marks the setup as done when it starts it: a parallel first request would run on a half-built app
+        with self._setup_lock:
+            super()._setup_server()
 
     def interpolate_index(self, **kwargs):  # pylint: disable=arguments-differ
         # use-credentials: the manifest must be fetched with cookies when an auth proxy sits in front of the app
@@ -93,18 +132,13 @@ class MyProxyFix(ProxyFix):
 
     def __call__(self, environ, start_response):
         prefix = environ.get("HTTP_X_INGRESS_PATH") or environ.get("HTTP_X_FORWARDED_PREFIX") or self.static_prefix
-        self.dash_app.config.__dict__["_read_only"] = []
-
         if prefix == "/":
-            self.dash_app.config.requests_pathname_prefix = ""
-            self.dash_app.config.url_base_pathname = None
+            self.dash_app.config.set_request_prefixes("", None, prefix)
         else:
             environ["HTTP_X_FORWARDED_PREFIX"] = prefix
             if not prefix.endswith("/"):
                 prefix += "/"
-            self.dash_app.config.requests_pathname_prefix = prefix
-            self.dash_app.config.url_base_pathname = prefix
-        self.dash_app.config.assets_external_path = prefix
+            self.dash_app.config.set_request_prefixes(prefix, prefix, prefix)
         environ["PATH_INFO"] = legacy_page_path(environ.get("PATH_INFO", ""))
         return super().__call__(environ, start_response)
 
@@ -150,7 +184,10 @@ def config_flask(title, base_path, debug: bool, host, port, reloader=False,
     app.wsgi_app = MyProxyFix(dash_app, base_path)
     # keep this line
     importlib.import_module(view)
-    return {"hostname": host, "port": port, "application": application, "use_reloader": reloader, "use_debugger": debug}
+    # threaded: one connection must not stop the others. WebKit opens one in advance and sends nothing for ~30 s,
+    # polling waited behind any long request, and a single idle socket stopped the whole server.
+    return {"hostname": host, "port": port, "application": application, "use_reloader": reloader, "use_debugger": debug,
+            "threaded": True}
 
 
 def run(config):

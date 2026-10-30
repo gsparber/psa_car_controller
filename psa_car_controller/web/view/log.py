@@ -103,7 +103,8 @@ def render(level, today=None):
 
 def get_log_layout():
     return html.Div([
-        html.Div([ui.page_title("Log"),
+        # the times stay the ones of the log file, and so of the download; the days group them the same way
+        html.Div([ui.page_title("Log", f"Times in the server's time zone ({datetime.now().astimezone():%Z})"),
                   dbc.Button([html.I(className="bi bi-download me-2"), "Download"], id=DOWNLOAD_BUTTON,
                              color="secondary", outline=True, size="sm", className="ms-auto")],
                  className="d-flex align-items-center"),

@@ -1,10 +1,64 @@
 import contextlib
+import errno
+import logging
+import os
+import secrets
 from functools import wraps
 from threading import Semaphore, Timer
 from typing import List
 
 import requests
 TIMEOUT_IN_S = 10
+# the file can't be replaced here (a file mounted on its own in a container, a read-only directory): only its content
+CANNOT_REPLACE = (errno.EACCES, errno.EPERM, errno.EBUSY, errno.EXDEV, errno.EROFS)
+
+logger = logging.getLogger(__name__)
+
+
+def atomic_write(name, data: bytes):
+    """Readers and other writers see the old or the new file, never a part of it: a request can read the file while
+    a timer writes it, and a crash in between would cost the login. Keeps the mode and owner of the existing file."""
+    target = os.path.realpath(name)  # a symlink stays a symlink
+    tmp = f"{target}.{secrets.token_hex(4)}.tmp"
+    try:
+        # O_EXCL with 0o666: the umask applies as for open(), unlike mkstemp and its 0o600
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    except OSError as e:
+        if e.errno not in CANNOT_REPLACE:
+            raise
+        return _write_in_place(target, data, e)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        _keep_mode_and_owner(target, tmp)
+        os.replace(tmp, target)
+        return None
+    except OSError as e:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        if e.errno not in CANNOT_REPLACE:
+            raise
+        return _write_in_place(target, data, e)
+
+
+def _keep_mode_and_owner(target, tmp):
+    try:
+        current = os.stat(target)
+    except FileNotFoundError:
+        return
+    os.chmod(tmp, current.st_mode & 0o7777)
+    tmp_stat = os.stat(tmp)
+    if (tmp_stat.st_uid, tmp_stat.st_gid) != (current.st_uid, current.st_gid):
+        with contextlib.suppress(OSError):
+            os.chown(tmp, current.st_uid, current.st_gid)
+
+
+def _write_in_place(target, data, reason):
+    logger.warning("Can't replace %s (%s), writing it in place", target, reason.strerror)
+    with open(target, "wb") as f:
+        f.write(data)
 
 
 def rate_limit(limit, every):

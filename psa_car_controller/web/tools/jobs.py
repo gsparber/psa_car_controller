@@ -1,7 +1,7 @@
 """Long actions of the web UI run in a thread and the page asks for their state, so the answer can't get lost.
 
-A login takes minutes. The web server handles one request at a time (run_simple without threaded) and a reverse proxy
-gives up long before that (Cloudflare: 100 s), which left the page without an answer and the login running unseen.
+A login takes minutes and a reverse proxy gives up long before that (Cloudflare: 100 s), which left the page without an
+answer and the login running unseen.
 The app is one process, a dict is enough to share the state between the requests.
 """
 import logging

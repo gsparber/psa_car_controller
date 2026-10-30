@@ -4,8 +4,21 @@ import plotly.graph_objects as go
 from dash import dcc, html
 from dash.dependencies import Output
 
+from psa_car_controller import __version__
+
 TOAST = "app-toast"
 TOAST_OUTPUTS = ("children", "header", "icon", "is_open")
+RELEASES_URL = "https://github.com/flobz/psa_car_controller/releases/tag/"
+# pyproject.toml holds 0.0.0, only release.yml sets the real one; unknown means not installed as a package
+DEV_VERSIONS = ("0.0.0", "unknown")
+
+
+def version_info():
+    """Text and release page of the running version; a dev build has no tag to link to."""
+    if __version__ in DEV_VERSIONS:
+        return "dev build", None
+    version = "v" + __version__
+    return version, RELEASES_URL + version
 
 
 def toast():
@@ -19,6 +32,15 @@ def toast_outputs():
 
 def toast_message(message, ok=True):
     return message, "Sent" if ok else "Error", "success" if ok else "danger", True
+
+
+def local_time(date, text, time_format="datetime"):
+    """A date shown in the time zone of the browser: clientside.js replaces text, written in the one of the server."""
+    return html.Time(text, dateTime=date.isoformat(), className="local-time", **{"data-format": time_format})
+
+
+def local_datetime(date):
+    return local_time(date, f"{date.astimezone():%a %d %b, %H:%M}")
 
 
 def page_title(title, subtitle=None):
@@ -77,7 +99,8 @@ def link_row(icon, label, href):
                     href=href, className="list-group-item list-group-item-action d-flex align-items-center text-body")
 
 
-def bar_chart(x, y, unit, color="#0d6efd", height=200):
+def bar_chart(chart_id, x, y, unit, color="#0d6efd", height=200):
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Small bar chart sized for phones: no toolbar, no zoom, values on hover.
     Text colors come from the CSS (.mini-chart) so the chart follows the light/dark theme."""
     fig = go.Figure(go.Bar(x=x, y=y, marker_color=color, hovertemplate=f"%{{x}}<br>%{{y:.1f}} {unit}<extra></extra>"))
@@ -86,4 +109,5 @@ def bar_chart(x, y, unit, color="#0d6efd", height=200):
                       xaxis={"fixedrange": True, "showgrid": False, "linecolor": "rgba(128,128,128,0.3)"},
                       yaxis={"fixedrange": True, "ticksuffix": f" {unit}", "gridcolor": "rgba(128,128,128,0.2)"},
                       font={"size": 11})
-    return dcc.Graph(figure=fig, config={"displayModeBar": False, "responsive": True}, className="mini-chart")
+    return dcc.Graph(id=chart_id, figure=fig, config={"displayModeBar": False, "responsive": True},
+                     className="mini-chart")

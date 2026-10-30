@@ -29,7 +29,7 @@ from .abrp import Abrp
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.common.mylogger import CustomLogger
 from psa_car_controller.common.sensitive_filter import sensitive_filter
-from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException
+from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException, atomic_write
 
 SCOPE = ['openid profile']
 CARS_FILE = "cars.json"
@@ -71,6 +71,7 @@ class PSAClient:
     _rate_limited = False
     _rate_limit_backoff = 0
     _stop_event: threading.Event = None
+    _save_lock = threading.Lock()
     # seconds waited between the cars during the current refresh
     _staggered = 0
     command_refresh: CommandStatusRefresh = None
@@ -136,7 +137,7 @@ class PSAClient:
                 self.service_information.client_secret,
                 # the MQTT customer id only differs from customer_id by its brand prefix
                 self.customer_id, self.customer_id and self.customer_id[2:]] + \
-            [car.vin for car in self.vehicles_list]
+            [car.vin for car in self.vehicles_list] + [car.vehicle_id for car in self.vehicles_list]
 
     def get_app_name(self):
         return realm_info[self.realm]['app_name']
@@ -417,19 +418,19 @@ class PSAClient:
     def save_config(self, name=None, force=False):
         if name is None:
             name = self.config_file
-        config = json.loads(json.dumps(self, cls=PSAClientEncoder))
-        if not config["refresh_token"]:
-            # null would lose the login for good, while a stored token might still be accepted
-            config["refresh_token"] = self._stored_refresh_token(name)
-            if config["refresh_token"]:
-                logger.warning("No refresh token in memory, keeping the one in %s", name)
-        config_str = json.dumps(config, sort_keys=True, indent=4).encode("utf8")
-        new_hash = md5(config_str).hexdigest()
-        if force or self._config_hash != new_hash:
-            with open(name, "wb") as f:
-                f.write(config_str)
-            self._config_hash = new_hash
-            logger.info("save config change")
+        with self._save_lock:  # read and write in one go: a slower save must not put older tokens back
+            config = json.loads(json.dumps(self, cls=PSAClientEncoder))
+            if not config["refresh_token"]:
+                # null would lose the login for good, while a stored token might still be accepted
+                config["refresh_token"] = self._stored_refresh_token(name)
+                if config["refresh_token"]:
+                    logger.warning("No refresh token in memory, keeping the one in %s", name)
+            config_str = json.dumps(config, sort_keys=True, indent=4).encode("utf8")
+            new_hash = md5(config_str).hexdigest()
+            if force or self._config_hash != new_hash:
+                atomic_write(name, config_str)
+                self._config_hash = new_hash
+                logger.info("save config change")
 
     @staticmethod
     def _stored_refresh_token(name) -> Optional[str]:

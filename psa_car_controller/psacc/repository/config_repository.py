@@ -1,5 +1,7 @@
+import io
 import logging
 import re
+import threading
 from datetime import datetime, timezone, timedelta
 from statistics import mean, StatisticsError
 
@@ -8,10 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler
 from pydantic_core import core_schema
 from typing import Any, List, Optional
 
+from psa_car_controller.common.utils import atomic_write
 from psa_car_controller.psacc.application.battery_charge_curve import BatteryChargeCurve
 from psa_car_controller.psacc.model.charge import Charge
 
 logger = logging.getLogger(__name__)
+
+_WRITE_LOCK = threading.Lock()
 
 DEFAULT_CONFIG = """[General]
 currency = €
@@ -238,15 +243,17 @@ class ConfigRepository(BaseModel):
     def write_config(self, name=None):
         if name is None:
             name = CONFIG_FILENAME
-        ConfigRepository(**self.model_dump())  # validate property before write
-        config_to_write = ConfigRepository.get_default_config()
-        self.config_dto_to_config_file(config_to_write)
-        self._write(name, config_to_write)
+        with _WRITE_LOCK:  # the last change wins, not the slower request
+            ConfigRepository(**self.model_dump())  # validate property before write
+            config_to_write = ConfigRepository.get_default_config()
+            self.config_dto_to_config_file(config_to_write)
+            self._write(name, config_to_write)
 
     @staticmethod
     def _write(name, config):
-        with open(name, "w", encoding="utf-8") as f:
-            config.write(f)
+        content = io.StringIO()
+        config.write(content)
+        atomic_write(name, content.getvalue().encode("utf-8"))
 
     @staticmethod
     def config_file_to_dto(config) -> 'ConfigRepository':

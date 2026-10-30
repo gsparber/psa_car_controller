@@ -40,12 +40,78 @@ const logger = (function () {
 
   return pub
 }())
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function pad2 (nb) {
+  return String(nb).padStart(2, '0')
+}
+
+// The dates of the server are UTC: without an offset, new Date() would take them for the time of the browser
+function parseDate (value) {
+  if (typeof value === 'string' && !/(Z|[+-]\d\d(:?\d\d)?)$/.test(value)) {
+    return new Date(value.replace(' ', 'T') + 'Z')
+  }
+  return new Date(value)
+}
+
+function localDay (date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+function localHour (date) {
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+const LOCAL_TIME_FORMATS = {
+  // "Fri 30 Oct, 14:35"
+  datetime: date => `${DAY_NAMES[date.getDay()]} ${pad2(date.getDate())} ${MONTH_NAMES[date.getMonth()]}, ` +
+    localHour(date),
+  // "14:35" today, "30 Oct 14:35" otherwise
+  updated: function (date) {
+    if (localDay(date) === localDay(new Date())) {
+      return localHour(date)
+    }
+    return `${date.getDate()} ${MONTH_NAMES[date.getMonth()]} ${localHour(date)}`
+  },
+  locale: date => `${date.toLocaleTimeString()} ${date.toLocaleDateString()}`
+}
+
+function localTimeText (value, format) {
+  const date = parseDate(value)
+  return isNaN(date) ? null : (LOCAL_TIME_FORMATS[format] || LOCAL_TIME_FORMATS.datetime)(date)
+}
+
+// ui.local_time renders <time> with the time of the server, this puts the time of the browser in it
+function localizeTimes (root) {
+  Array.from(root.getElementsByClassName('local-time')).forEach(function (element) {
+    const text = localTimeText(element.getAttribute('datetime'), element.dataset.format)
+    if (text !== null && element.textContent !== text) {
+      element.textContent = text
+    }
+  })
+}
+
+if (typeof document !== 'undefined') {
+  // runs before the browser paints, for what the server sends and everything Dash adds or updates later
+  new MutationObserver(() => localizeTimes(document)).observe(document.documentElement, {
+    childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['datetime']
+  })
+}
+
 function addLocaleDate (data, dateKey) {
   const dateOption = [undefined, { hour: 'numeric', minute: 'numeric' }]
   function dateToLocale (row, key) {
-    const date = new Date(row[key])
+    if (row[key] === null || row[key] === undefined) { // a charge in progress has no stop yet
+      row[key + '_str'] = ''
+      row[key + '_local'] = null
+      return
+    }
+    const date = parseDate(row[key])
     row[key] = date.getTime()
     row[key + '_str'] = date.toLocaleDateString(...dateOption)
+    // a number or a date with an offset would be shown as UTC by plotly, it keeps a date without offset as it is
+    row[key + '_local'] = `${localDay(date)} ${localHour(date)}:${pad2(date.getSeconds())}`
   }
   let datasetName, dataset
   for ([datasetName, dataset] of Object.entries(data)) {
@@ -53,6 +119,61 @@ function addLocaleDate (data, dateKey) {
       dateKey[datasetName].forEach(key => dateToLocale(row, key))
     })
   }
+}
+
+// The labels of the date slider, which the server writes in its own time zone. Same steps as get_marks_from_start_end
+function localSliderMarks (marks) { // eslint-disable-line no-unused-vars
+  if (!marks) {
+    return marks
+  }
+  const stamps = Object.keys(marks).map(Number)
+  const step = stamps.length > 1 ? stamps[1] - stamps[0] : 86400
+  const res = {}
+  stamps.forEach(function (stamp) {
+    const date = new Date(stamp * 1000)
+    let label = date.toLocaleDateString(undefined, { year: '2-digit', month: 'numeric', day: 'numeric' })
+    if (step < 86400) {
+      label += ` ${pad2(date.getHours())}h${step > 3600 ? '' : pad2(date.getMinutes())}`
+    }
+    res[stamp] = Object.assign({}, marks[stamp], { label })
+  })
+  return res
+}
+
+// insights_data.series again, with the days and months of the browser
+function bucketSeries (spec) {
+  const start = new Date(spec.start * 1000)
+  const end = new Date(spec.end * 1000)
+  const isDay = spec.unit === 'day'
+  const key = date => isDay ? localDay(date) : localDay(new Date(date.getFullYear(), date.getMonth(), 1))
+  const sums = new Map()
+  const last = key(end)
+  // from the calendar date and not by adding 24 h: a day with a clock change is not 24 h long
+  let current = new Date(start.getFullYear(), start.getMonth(), isDay ? start.getDate() : 1)
+  while (key(current) <= last) {
+    sums.set(key(current), [0, 0])
+    current = isDay
+      ? new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1)
+      : new Date(current.getFullYear(), current.getMonth() + 1, 1)
+  }
+  spec.rows.forEach(function ([stamp, value, divisor]) {
+    const bucket = key(new Date(stamp * 1000))
+    const sum = sums.get(bucket) || [0, 0]
+    sum[0] += value
+    sum[1] += divisor || 0
+    sums.set(bucket, sum)
+  })
+  const y = Array.from(sums.values()).map(function ([value, divisor]) {
+    if (!spec.per_100) {
+      return value
+    }
+    return divisor ? value / divisor * 100 : null
+  })
+  return { x: Array.from(sums.keys()), y }
+}
+
+function localBars (spec, figure) { // eslint-disable-line no-unused-vars
+  return Object.assign({}, figure, { data: [Object.assign({}, figure.data[0], bucketSeries(spec))] })
 }
 
 function filterDataset (data, range) {
@@ -199,6 +320,21 @@ function updateCardsValue (data) {
   }
 }
 
+const lastSort = {}
+
+// A table goes from descending to unsorted and only then to ascending, and unsorted looks like ascending for the dates
+// and ids, so that click seems to do nothing. This turns unsorted into ascending: a click always changes the order.
+function skipUnsorted (tableId, sortBy) { // eslint-disable-line no-unused-vars
+  if (sortBy && sortBy.length > 0) {
+    lastSort[tableId] = sortBy[0].column_id
+    return dash_clientside.no_update // eslint-disable-line  no-undef
+  }
+  if (lastSort[tableId] === undefined) {
+    return dash_clientside.no_update // eslint-disable-line  no-undef
+  }
+  return [{ column_id: lastSort[tableId], direction: 'asc' }]
+}
+
 function sortDataset (ctx, data, tables) {
   const tableId = ctx.prop_id.split('.')[0]
   const table = tables.filter(table => table.table_id === tableId)[0]
@@ -211,12 +347,13 @@ function sortDataset (ctx, data, tables) {
       sorted = data[table.src].sort(function (a, b) {
         return a[columnId] - b[columnId]
       })
-    } else if (typeof data[table.src][0][columnId] === 'number') {
+    } else if (data[table.src].some(row => typeof row[columnId] === 'number')) {
+      // no price or co2 yet is null, whatever the first row has
       sorted = data[table.src].sort(function (a, b) {
         return a[columnId] - b[columnId]
       })
     } else {
-      sorted = data[table.src].sort((a, b) => a[columnId].localeCompare(b[columnId]))
+      sorted = data[table.src].sort((a, b) => String(a[columnId] ?? '').localeCompare(String(b[columnId] ?? '')))
     }
     if (asc === false) {
       sorted = sorted.reverse()
@@ -264,7 +401,8 @@ function filterAndSort (data, range, figures, p, log, sort, config) { // eslint-
   console.log('sort', sort)
   if (ctx.length > 0 && ctx[0].prop_id.endsWith('sort_by')) {
     dataFiltered = filterDataset(data, range)
-    sortDataset(ctx[0], dataFiltered, p.table_src)
+    // all of them: the other table gets new rows too and would lose its order
+    sortMultipleTable(sort, dataFiltered, p.table_src)
     outFigures.push(...updateTables(dataFiltered, p.table_src))
     outFigures.push(...figures.graph)
     outFigures.push(...figures.maps)

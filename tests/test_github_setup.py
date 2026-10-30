@@ -1,14 +1,17 @@
 import contextlib
+import io
 import json
 import logging
 import os
 import tempfile
+import traceback
 import unittest
 from unittest.mock import patch
 
 import requests
 
-from psa_car_controller.psa.setup.github import GithubError, get_github_sha_from_file, urlretrieve_from_github
+from psa_car_controller.psa.setup.github import GithubError, TOKEN_ENV, get_github_sha_from_file, \
+    urlretrieve_from_github
 from tests.github_fixture import FakeGithub, RAW_URL, TREE_URL, build_apk_archive, rate_limit_response, response
 
 APK = "mypeugeot.apk"
@@ -69,6 +72,88 @@ class TestGithubSha(unittest.TestCase):
     def test_is_a_connection_error_for_the_web_setup(self):
         # config_views shows the message of a ConnectionError without a stack trace
         self.assertTrue(issubclass(GithubError, ConnectionError))
+
+
+class TestGithubToken(WorkingDirTestCase):
+    TOKEN = "ghs_secret-token-value"
+
+    def setUp(self):
+        super().setUp()
+        self.log = io.StringIO()
+        handler = logging.StreamHandler(self.log)
+        logger = logging.getLogger("psa_car_controller.psa.setup.github")
+        previous_level = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        self.addCleanup(logger.setLevel, previous_level)
+        self.addCleanup(logger.removeHandler, handler)
+
+    def with_token(self, token):
+        env = patch.dict(os.environ, {TOKEN_ENV: token})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def assert_token_is_hidden(self, error=None):
+        self.assertNotIn(self.TOKEN, self.log.getvalue())
+        self.assertNotIn(self.TOKEN, str(error))
+
+    def test_token_authenticates_the_api_only(self):
+        self.with_token(f" {self.TOKEN}\n")
+        github = FakeGithub({ARCHIVE: build_apk_archive()})
+        with patch("requests.get", side_effect=github.get) as get:
+            self.write(ARCHIVE, b"previous version")
+            urlretrieve_from_github(USER, REPO, "", APK)
+        headers = {call.args[0]: call.kwargs.get("headers", {}) for call in get.call_args_list}
+        self.assertEqual(f"Bearer {self.TOKEN}", headers[TREE_URL]["Authorization"])
+        self.assertNotIn("Authorization", headers[RAW_URL + ARCHIVE])
+        self.assert_token_is_hidden()
+
+    def test_without_token_the_api_is_anonymous(self):
+        for env in ({}, {TOKEN_ENV: "  "}):
+            with self.subTest(env), patch.dict(os.environ, env), \
+                    patch("requests.get", side_effect=FakeGithub({ARCHIVE: b"x"}).get) as get:
+                if not env:
+                    os.environ.pop(TOKEN_ENV, None)
+                get_github_sha_from_file(USER, REPO, "", ARCHIVE)
+                self.assertNotIn("Authorization", get.call_args.kwargs["headers"])
+
+    def test_refused_token_is_hidden(self):
+        self.with_token(self.TOKEN)
+        with patch("requests.get", side_effect=FakeGithub(tree_answer=response(401)).get), \
+                self.assertRaises(GithubError) as error:
+            get_github_sha_from_file(USER, REPO, "", ARCHIVE)
+        self.assertIn("401", str(error.exception))
+        self.assert_token_is_hidden(error.exception)
+
+    def test_network_failure_hides_the_token(self):
+        # the failure is logged with its traceback
+        self.with_token(self.TOKEN)
+        failure = requests.ConnectionError("no route")
+        with patch("requests.get", side_effect=FakeGithub(tree_answer=failure).get), \
+                self.assertRaises(GithubError) as error:
+            get_github_sha_from_file(USER, REPO, "", ARCHIVE)
+        self.assertIn("no route", self.log.getvalue())
+        self.assert_token_is_hidden(error.exception)
+
+    def test_malformed_token_is_hidden(self):
+        # requests.get isn't replaced: its InvalidHeader quotes the token, it's raised before the connection
+        self.with_token(f"{self.TOKEN}\nsecond line")
+        with patch("requests.adapters.HTTPAdapter.send", side_effect=AssertionError("network")), \
+                self.assertRaises(GithubError) as error:
+            get_github_sha_from_file(USER, REPO, "", ARCHIVE)
+        self.assertIn(TOKEN_ENV, str(error.exception))
+        self.assert_token_is_hidden(error.exception)
+        self.assertNotIn(self.TOKEN, "".join(traceback.format_exception(error.exception)))
+
+    def test_malformed_token_while_retrieving_is_hidden(self):
+        # the failed check only logs a warning and keeps the local apk
+        self.with_token(f"{self.TOKEN}\nsecond line")
+        self.write(APK, b"local apk")
+        self.write(ARCHIVE, b"local archive")
+        with patch("requests.adapters.HTTPAdapter.send", side_effect=AssertionError("network")):
+            urlretrieve_from_github(USER, REPO, "", APK)
+        self.assertIn(TOKEN_ENV, self.log.getvalue())
+        self.assert_token_is_hidden()
 
 
 class TestUrlRetrieve(WorkingDirTestCase):

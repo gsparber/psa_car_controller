@@ -1,14 +1,20 @@
 import io
 import json
 import logging
+import os
+import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
 from psa_car_controller.common.mylogger import file_handler, stream_handler
 from psa_car_controller.common.sensitive_filter import SensitiveDataFilter, sensitive_filter
+from psa_car_controller.psa.setup.app_decoder import InitialSetup
+from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.model.car import Car, Cars
 
 VIN = "VR3UHZKXZLT123456"
+VEHICLE_ID = "cV9kZXYtdmVoaWNsZS04ODQy"
 ACCESS_TOKEN = "f2a1c9d0-7b4e-4c1a-9e3d-2b8f6a5c4d3e"
 CUSTOMER_ID = "AP-ACNT200000123456"
 
@@ -92,6 +98,75 @@ class TestSensitiveFilter(unittest.TestCase):
         self.assertNotIn("VXKUHZKXZL4567890", output)
         self.assertIn("***7890", output)
 
+    def test_vehicle_id_in_the_vehicle_list_is_masked(self):
+        # GIVEN a filter without any known value, and the list of cars as it was logged at start
+        test_logger, stream = get_logger(SensitiveDataFilter())
+        cars = Cars([Car(VIN, VEHICLE_ID, "Peugeot", label="e-208", precond_programs={"program1": {"hour": 7}})])
+
+        # WHEN it is logged as a str, also with quotes that make python escape the nested dict
+        test_logger.info(str(cars))
+        cars[0].label = "it's \"mine\""
+        test_logger.info(str(cars))
+        test_logger.info("car: %s", json.dumps({"vehicleId": VEHICLE_ID}))
+        test_logger.info("car: %s", json.dumps(json.dumps({"vehicle_id": VEHICLE_ID})))
+        test_logger.info("GET ?vehicle-id=%s", VEHICLE_ID)
+
+        # THEN the id is gone and the rest is still readable
+        output = stream.getvalue()
+        self.assertNotIn(VEHICLE_ID, output)
+        self.assertNotIn(VEHICLE_ID[-4:], output)
+        self.assertIn("'vehicle_id': '***'", output)
+        self.assertIn("'brand': 'Peugeot'", output)
+
+    def test_id_of_a_vehicle_from_the_api_is_masked(self):
+        # GIVEN a filter without any known value: the first answer is logged before the car is added
+        test_logger, stream = get_logger(SensitiveDataFilter())
+        vehicle = {"id": VEHICLE_ID, "brand": "Peugeot", "_links": {"self": {"href": "https://api/v"}, "id": "link"},
+                   "pictures": [], "vin": VIN}
+        other = {"id": "harmless-id-0001", "name": "not a car"}
+
+        # WHEN the response body and the model are logged, with the id on either side of the vin
+        test_logger.debug("response body: %s", json.dumps({"_embedded": {"vehicles": [vehicle]}, "other": other})
+                          .encode())
+        test_logger.debug("model: %s", {"brand": "Peugeot", "vin": VIN, "id": VEHICLE_ID, "other": other})
+
+        # THEN only the id of the vehicle is masked
+        output = stream.getvalue()
+        self.assertNotIn(VEHICLE_ID, output)
+        self.assertIn('"id": "***"', output)
+        self.assertIn("'id': '***'", output)
+        self.assertIn('"id": "harmless-id-0001"', output)
+        self.assertIn("'id': 'harmless-id-0001'", output)
+        self.assertIn('"id": "link"', output)
+
+    def test_other_ids_are_kept(self):
+        # GIVEN a filter without any known value
+        test_logger, stream = get_logger(SensitiveDataFilter())
+
+        # WHEN ids that have nothing to do with a car are logged
+        test_logger.info("job: %s", {"id": "job-123456", "correlation_id": "corr-123456", "vin_count": 1})
+        test_logger.info('callback: {"id": "submit-form", "property": "n_clicks"}')
+        test_logger.info("trip id=trip-123456 and a vin: VIN is not a key here")
+        test_logger.info("vehicle_id: %s", None)
+
+        # THEN they stay
+        output = stream.getvalue()
+        for kept in ("'id': 'job-123456'", "'correlation_id': 'corr-123456'", '"id": "submit-form"',
+                     "id=trip-123456", "vehicle_id: None"):
+            self.assertIn(kept, output)
+
+    def test_psa_client_registers_the_vehicle_id(self):
+        # GIVEN a configured client with a car
+        myp = PSAClient.load_config("tests/data/config.json")
+        myp.vehicles_list = Cars([Car(VIN, VEHICLE_ID, "Peugeot")])
+
+        # WHEN the id is part of a text without any key, like the URL of a failed request
+        text = sensitive_filter.mask(f"404 for https://api/user/vehicles/{VEHICLE_ID}/status")
+
+        # THEN it is masked
+        self.assertNotIn(VEHICLE_ID, text)
+        self.assertIn("***" + VEHICLE_ID[-4:], text)
+
     def test_exception_text_is_masked(self):
         # GIVEN a filter knowing the token
         log_filter = SensitiveDataFilter()
@@ -137,6 +212,50 @@ class TestSensitiveFilter(unittest.TestCase):
 
         # THEN its secrets can still be read
         self.assertIn(myp.manager.refresh_token, myp.sensitive_values())
+
+
+class TestVehicleLogLines(unittest.TestCase):
+    """Only checks what the app itself writes: a line that isn't written can't leak through a gap of the filter."""
+
+    def setUp(self):
+        self.cars = Cars([Car(VIN, VEHICLE_ID, "Peugeot", label="e-208",
+                              precond_programs={"program1": {"hour": 7}})])
+
+    def assert_only_summary(self, output):
+        self.assertIn("***3456 (e-208)", output)
+        for private in (VEHICLE_ID, VIN, "vehicle_id", "precond_programs"):
+            self.assertNotIn(private, output)
+
+    def test_start_of_the_services(self):
+        # GIVEN a controller knowing a car
+        app = PSACarController.__new__(PSACarController)
+        app.myp = MagicMock()
+        app.myp.get_vehicles.return_value = self.cars
+        app.args = MagicMock(refresh=False)
+        app.start_remote_control = MagicMock()
+
+        # WHEN the services start
+        with self.assertLogs("psa_car_controller.psacc.application.car_controller", level="INFO") as logs:
+            app._PSACarController__start_services()
+
+        # THEN the cars are logged without their ids
+        self.assert_only_summary("\n".join(logs.output))
+
+    def test_end_of_the_login(self):
+        # GIVEN a login that found a car (__init__ logs in to PSA servers, so it is skipped)
+        setup = InitialSetup.__new__(InitialSetup)
+        setup.user_info = {"vehicles": []}
+        setup.psacc = MagicMock()
+        setup.psacc.get_vehicles.return_value = self.cars
+
+        # WHEN the login ends
+        with tempfile.TemporaryDirectory() as tmp_dir, \
+                patch("psa_car_controller.psa.setup.app_decoder.PSACarController"), \
+                self.assertLogs("psa_car_controller.psa.setup.app_decoder", level="INFO") as logs:
+            setup.connect("code", config_prefix=tmp_dir + os.sep)
+
+        # THEN the cars are logged without their ids
+        self.assert_only_summary("\n".join(logs.output))
 
 
 if __name__ == '__main__':

@@ -2,6 +2,7 @@ import logging
 import traceback
 
 from dash import html
+from dash.exceptions import PreventUpdate
 
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.tools import jobs
@@ -17,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 OAUTH_PREFIX = "oauth"
 STEP_CONNECT = "Checking the code and reading your cars… This can take a minute."
+
+
+def oauth_link_missing():
+    """The address without ?url=: the login form links here with the address of the login."""
+    return dbc.Alert(["This page needs the link of a login. ",
+                      html.A("Start the login from the config page", href=dash_app.get_relative_path("/config")), "."],
+                     color="warning", className="my-3")
 
 
 def get_oauth_config_layout(redirect_url):
@@ -75,7 +83,9 @@ def render_oauth(state):
     State(f"{OAUTH_PREFIX}-job", "data"),
     prevent_initial_call=True,
     running=[(Output("finish-oauth", "disabled"), True, False)])
-def finish_oauth(n_clicks, code, stored=None):  # pylint: disable=unused-argument
+def finish_oauth(n_clicks, code, stored=None):
+    if not n_clicks:
+        raise PreventUpdate()
     setup = config_views.INITIAL_SETUP
     if setup is None:
         return refused_view(dbc.Alert("This login is gone, the app has probably restarted. Please start again from "

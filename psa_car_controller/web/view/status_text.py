@@ -133,15 +133,6 @@ def format_age(seconds):
     return f"{hours // 24} days ago"
 
 
-def updated_text(updated_at, age_seconds, now=None):
-    """Time and age of the data ("updated 10:12 (5 min ago)"), None without a date."""
-    updated = format_updated(updated_at, now)
-    if updated is None:
-        return None
-    age = format_age(age_seconds)
-    return f"updated {updated} ({age})" if age else f"updated {updated}"
-
-
 def outdated_text(age_seconds):
     """Warning for a status kept because the API stopped answering."""
     age = format_age(age_seconds)

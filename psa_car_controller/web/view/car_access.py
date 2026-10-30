@@ -1,5 +1,6 @@
 """Car lookup, status reads and remote commands shared by the home, charge and climate pages."""
 import logging
+import threading
 import time
 
 import dash_bootstrap_components as dbc
@@ -17,6 +18,9 @@ from psa_car_controller.web.view import ui
 
 logger = logging.getLogger(__name__)
 
+# Cars a request is sending a command to right now
+_sending = set()
+_sending_lock = threading.Lock()
 # Commands sent from any page, so a tile can show "waiting for car" until the car reports the new state
 PENDING_STORE = "app-pending"
 ACTION = "car-action"
@@ -29,6 +33,7 @@ COMMAND_POLL = "app-command-poll"
 COMMAND_POLL_MS = 3000
 # How long the result stays on screen
 COMMAND_SHOWN_S = 8
+REMOTE_OFF_HINT = "Started with --remote-disable or --offline."
 COMMAND_LABELS = {"/VehCharge/state": "Status update", "/VehCharge": "Charge", "/ThermalPrecond": "Climate",
                   "/Doors": "Doors", "/Horn": "Horn", "/Lights": "Lights"}
 RESULTS = {SUCCESS: ("Done", "bi-check-circle-fill", "text-success"),
@@ -117,12 +122,21 @@ def command_label(name):
 def send_command(action, car: Car):
     """Run a remote command. Returns (message, ok, target state the car should report or None, correlation id)."""
     remote = app().myp.remote_client
-    busy = remote.commands.pending(car.vin)
+    with _sending_lock:
+        busy = remote.commands.pending(car.vin)
+        if busy is None and car.vin in _sending:
+            busy = {"name": None}  # another request is sending right now, its command isn't listed yet
+        if not busy:
+            _sending.add(car.vin)
     if busy:
         # the car runs one command at a time; the wait ends with its answer or after PENDING_TIMEOUT
         return f"The car is still busy with: {command_label(busy['name'])}, try again shortly", False, None, None
-    with remote.track_commands() as sent:
-        message, ok, target = _send_command(remote, action, car)
+    try:
+        with remote.track_commands() as sent:
+            message, ok, target = _send_command(remote, action, car)
+    finally:
+        with _sending_lock:
+            _sending.discard(car.vin)
     return message, ok, target, sent[-1] if ok and sent else None
 
 

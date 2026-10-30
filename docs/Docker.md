@@ -31,6 +31,7 @@ You can modify some parameter with docker environment variable:
 |PSACC_CONFIG_DIR | overide configuration directory |
 |PSACC_PORT       | change port                     |
 |PSACC_OPTIONS    | add cli argurment               |
+|PSACC_GITHUB_TOKEN | optional, GitHub token for the version check of the application file, above 60 requests per hour |
 
 
 

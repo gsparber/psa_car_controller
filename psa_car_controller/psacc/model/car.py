@@ -1,7 +1,9 @@
 import json
 import logging
+import threading
 from copy import copy
 from psa_car_controller.common.sensitive_filter import mask_value
+from psa_car_controller.common.utils import atomic_write
 from .car_model import DEFAULT_BATTERY_POWER, DEFAULT_FUEL_CAPACITY, DEFAULT_MAX_ELEC_CONSUMPTION, \
     DEFAULT_MAX_FUEL_CONSUMPTION
 from .car_status import CarStatus
@@ -54,6 +56,11 @@ def _replace_unknown_model_values(data):
                        mask_value(data["vin"]), DEFAULT_BATTERY_POWER, model.name, model.battery_power,
                        model.battery_power)
     return data
+
+
+def describe_cars(cars) -> str:
+    """For the logs: enough to recognize the cars, without their ids and preconditioning programs."""
+    return ", ".join(f"{mask_value(car.vin)} ({car.label})" for car in cars)
 
 
 # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -158,6 +165,8 @@ class Car:
 
 
 class Cars(list):
+    _lock = threading.RLock()
+
     def __init__(self, *args):
         list.__init__(self, *args)
         self.config_filename = "cars.json"
@@ -175,12 +184,13 @@ class Cars(list):
         return None
 
     def add(self, car: Car):
-        car_with_same_vin = self.get_car_by_vin(car.vin)
-        if not car_with_same_vin:
-            self.append(car)
-        elif car_with_same_vin.vehicle_id != car.vehicle_id:
-            logger.warning("Vehicle ID changed !")
-            car_with_same_vin.vehicle_id = car.vehicle_id
+        with self._lock:  # requests can list the cars at the same time: no car twice
+            car_with_same_vin = self.get_car_by_vin(car.vin)
+            if not car_with_same_vin:
+                self.append(car)
+            elif car_with_same_vin.vehicle_id != car.vehicle_id:
+                logger.warning("Vehicle ID changed !")
+                car_with_same_vin.vehicle_id = car.vehicle_id
 
     @classmethod
     def from_json(cls, data: list):
@@ -193,9 +203,9 @@ class Cars(list):
     def save_cars(self, name=None):
         if name is None:
             name = self.config_filename
-        config_str = json.dumps(self, default=lambda car: car.to_dict(), sort_keys=True, indent=4)
-        with open(name, "w", encoding="utf-8") as file:
-            file.write(config_str)
+        with self._lock:  # read and write in one go: a slower save must not put older values back
+            config_str = json.dumps(self, default=lambda car: car.to_dict(), sort_keys=True, indent=4)
+            atomic_write(name, config_str.encode("utf-8"))
 
     @staticmethod
     def load_cars(name=None):

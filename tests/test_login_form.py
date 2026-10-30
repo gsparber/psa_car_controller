@@ -54,13 +54,11 @@ class LoginFormTestCase(unittest.TestCase):
     def setUp(self):
         self.views = get_web_view("config_views")
         isolate_jobs(self)
-        triggered = SimpleNamespace(triggered=[{"prop_id": "submit-form.n_clicks"}])
         self.setup = MagicMock()
         self.setup.psacc.manager.generate_redirect_url.return_value = "https://example.com/authorize"
         self.setup.psacc.manager.redirect_uri = "mymop://oauth2redirect"
         config = SimpleNamespace(Login_Worker=SimpleNamespace(url=""))
-        for name, target, new in (("context", "callback_context", triggered),
-                                  ("headless", "get_oauth_code_headless", None),
+        for name, target, new in (("headless", "get_oauth_code_headless", None),
                                   ("initial_setup", "InitialSetup", MagicMock(return_value=self.setup))):
             patcher = patch.object(self.views, target, new) if new else patch.object(self.views, target)
             setattr(self, name, patcher.start())

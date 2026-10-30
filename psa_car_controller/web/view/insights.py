@@ -1,8 +1,8 @@
 """Insights page: driving and charging totals for a period, sized for phones. The full analysis stays on /v1/stats."""
 import logging
 
-from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash import MATCH, dcc, html
+from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from psa_car_controller.psacc.application.charging import Charging
@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 PERIOD = "insights-period"
 CONTENT = "insights-content"
+CHART = "insights-chart"
+CHART_DATA = "insights-chart-data"
 
 
 # views owns the trips cache (rebuilt when the database changes) and registers how to read it
@@ -37,10 +39,16 @@ def _consumption_series(trips, period):
     return x, [e / d * 100 if d else None for e, d in zip(energy, distance)]
 
 
+def _chart(name, x, y, unit, local, **kwargs):
+    """Bars by day or month of the server until clientside.js has redone them with the ones of the browser."""
+    return [dcc.Store(id={"type": CHART_DATA, "index": name}, data=local),
+            ui.bar_chart({"type": CHART, "index": name}, x, y, unit, **kwargs)]
+
+
 def _trip_row(trip, unit):
     return html.Div([
         html.I(className="bi bi-geo me-3"),
-        html.Div(f"{trip['start_at'].astimezone():%a %d %b, %H:%M}", className="flex-grow-1 text-nowrap"),
+        html.Div(ui.local_datetime(trip["start_at"]), className="flex-grow-1 text-nowrap"),
         html.Div([html.Div(f"{ui.fmt(trip['distance'], 1)} {units.distance_label(unit)}", className="fw-semibold"),
                   html.Small(f"{ui.fmt(trip['consumption_km'], 1)} {units.consumption_label(unit)}",
                              className="text-body-secondary")],
@@ -68,15 +76,20 @@ def _content(period):
     ])]
     if trips:
         x, y = insights_data.series(trips, "distance", period)
-        content.append(ui.section("Distance", [ui.bar_chart(x, y, units.distance_label(unit))]))
+        content.append(ui.section("Distance", _chart("distance", x, y, units.distance_label(unit),
+                                                     insights_data.local_series(trips, "distance", period))))
         x, y = _consumption_series(trips, period)
-        content.append(ui.section("Consumption", [ui.bar_chart(x, y, units.consumption_label(unit), color="#fd7e14")]))
+        local = insights_data.local_series(trips, "consumption", period, divisor_key="distance")
+        content.append(ui.section("Consumption", _chart("consumption", x, y, units.consumption_label(unit), local,
+                                                        color="#fd7e14")))
         recent = sorted(trips, key=lambda t: t["start_at"], reverse=True)[:8]
         content.append(ui.section("Recent trips", [html.Div([
             _trip_row(trip, unit) for trip in recent], className="list-group")]))
     if charges:
         x, y = insights_data.series(charges, "kw", period)
-        content.append(ui.section("Charged energy", [ui.bar_chart(x, y, "kWh", color="#198754")]))
+        content.append(ui.section("Charged energy", _chart("charged", x, y, "kWh",
+                                                           insights_data.local_series(charges, "kw", period),
+                                                           color="#198754")))
     return content
 
 
@@ -95,3 +108,9 @@ def show_content(period):
     if period not in insights_data.PERIODS:
         raise PreventUpdate
     return _content(period)
+
+
+dash_app.clientside_callback("function(local, figure) { return localBars(local, figure) }",
+                             Output({"type": CHART, "index": MATCH}, "figure"),
+                             Input({"type": CHART_DATA, "index": MATCH}, "data"),
+                             State({"type": CHART, "index": MATCH}, "figure"))

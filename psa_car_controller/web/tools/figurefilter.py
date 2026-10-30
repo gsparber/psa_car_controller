@@ -1,12 +1,11 @@
-import json
 import logging
 from logging import DEBUG
 
 from dash import dcc
-from dash._utils import create_callback_id
-from dash.dependencies import Output, Input
+from dash.dependencies import Output, Input, State
 
 logger = logging.getLogger(__name__)
+PARAMS_STORE = 'clientside-params-store'
 
 
 class Graph:
@@ -70,12 +69,6 @@ class FigureFilter:
                 "tables": [table.figure for table in self.tables],
                 "maps": [map.figure for map in self.maps]}
 
-    def __get_output(self) -> list:
-        outputs = [Output(table.table_id, "data") for table in self.tables]
-        outputs.extend([Output(graph.graph_id, "figure") for graph in self.graphs])
-        outputs.extend([Output(graph.graph_id, "figure") for graph in self.maps])
-        return outputs
-
     @staticmethod
     def __get_graph_x_label(graphs):
         return [graph.x for graph in graphs]
@@ -84,57 +77,43 @@ class FigureFilter:
     def __get_graph_y_label(graphs):
         return [graph.y for graph in graphs]
 
-    def __get_table_input_sort_by(self):
-        inputs = [Input(table.table_id, 'sort_by') for table in self.tables]
-        return inputs
-
-    def gen_sort_variable(self):
-        res = ", ".join([chr(i) for i in range(ord('a'), ord('a') + len(self.tables))])
-        return res
-
-    def __gen_sort_dict(self):
-        res = "{"
-        i = ord("a")
-        for table in self.tables:
-            res += f'"{table.table_id}": {chr(i)},'
-            i += 1
-        res = res[:-1] + "}"
-        return res
-
-    def get_params(self):
-        params = json.dumps({
+    def get_params(self, config: dict):
+        return {
             "date_columns": self.__get_table_date_column_id(),
             "table_src": figures_to_dict(self.tables),
             "graph_x_label": self.__get_graph_x_label(self.graphs),
             "graph_y_label": self.__get_graph_y_label(self.graphs),
             "map_x_label": self.__get_graph_x_label(self.maps),
-            "map_y_label": self.__get_graph_y_label(self.maps)
-        }, indent=4)
-        return params
+            "map_y_label": self.__get_graph_y_label(self.maps),
+            "log_level": 10 if logger.isEnabledFor(DEBUG) else 20,
+            "config": config
+        }
 
-    def set_clientside_callback(self, dash_app, config: dict):
-        output = self.__get_output()
-        inputs = [Input('clientside-data-store', 'data'),
-                  Input('date-slider', 'value'),
-                  Input('clientside-figure-store', 'data'),
-                  *self.__get_table_input_sort_by()]
-        callback_id = create_callback_id(self.__get_output(), inputs)
-        if callback_id not in dash_app.callback_map:
-            config_str = json.dumps(config)
-            if logger.isEnabledFor(DEBUG):
-                log_level = 10
-            else:
-                log_level = 20
-            fct_def = f"""function(data,range, figures, {self.gen_sort_variable()}) {{
-                            const params={self.get_params()}
-                            const logLevel={log_level}
-                            return filterAndSort(data, range, figures, params, logLevel,
-                             {self.__gen_sort_dict()}, {config_str})
-                          }}"""
-            dash_app.clientside_callback(fct_def, *output, *inputs)
-            return True
-        return False
-
-    def get_store(self):
+    def get_store(self, config: dict):
         return [dcc.Store(id='clientside-figure-store', data=self.__get_figures()),
-                dcc.Store(id='clientside-data-store', data=self.src)]
+                dcc.Store(id='clientside-data-store', data=self.src),
+                dcc.Store(id=PARAMS_STORE, data=self.get_params(config))]
+
+
+def set_clientside_callback(dash_app, table_ids: list, figure_ids: list):
+    """Call it at import, once. The browser asks for the callbacks when it loads the app, a callback registered while
+    a page is built reaches it only after a reload. So it knows just the ids, the rest comes with the page in a store.
+    table_ids and figure_ids have the order of the filter that fills the store: tables, graphs, then maps."""
+    sort_args = [f"sort{i}" for i in range(len(table_ids))]
+    sort_dict = ", ".join(f'"{table_id}": {arg}' for table_id, arg in zip(table_ids, sort_args))
+    dash_app.clientside_callback(
+        f"""function(data, range, figures, {", ".join(sort_args)}, params) {{
+                return filterAndSort(data, range, figures, params, params.log_level, {{{sort_dict}}}, params.config)
+            }}""",
+        *[Output(table_id, "data") for table_id in table_ids],
+        *[Output(figure_id, "figure") for figure_id in figure_ids],
+        Input('clientside-data-store', 'data'),
+        Input('date-slider', 'value'),
+        Input('clientside-figure-store', 'data'),
+        *[Input(table_id, 'sort_by') for table_id in table_ids],
+        State(PARAMS_STORE, 'data'))
+    for table_id in table_ids:
+        dash_app.clientside_callback(
+            f"function(sortBy) {{ return skipUnsorted('{table_id}', sortBy) }}",
+            Output(table_id, 'sort_by'),
+            Input(table_id, 'sort_by'))

@@ -1,10 +1,12 @@
 import logging
 import re
+import threading
+import time
 import traceback
 from collections import namedtuple
 from urllib import parse
 
-from dash import callback_context, html, dcc
+from dash import html, dcc
 from dash.exceptions import PreventUpdate
 
 from psa_car_controller.psa.constants import BRAND
@@ -258,9 +260,11 @@ def markLoginForm(n_clicks, app_name, email, password, countrycode):  # pylint: 
     State(f"{LOGIN_PREFIX}-job", "data"),
     prevent_initial_call=True,
     running=[(Output("submit-form", "disabled"), True, False)])
-# pylint: disable-next=unused-argument,too-many-arguments,too-many-positional-arguments
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def connectPSA(n_clicks, app_name, email, password, countrycode, stored=None):
     """Only starts the login, which takes minutes: the job and its polling (register_job_view below) do the rest."""
+    if not n_clicks:
+        raise PreventUpdate()
     if check_login_form(app_name, email, password, countrycode):
         # nothing leaves this app before the marked fields are fixed
         return refused_view(dbc.Alert("Please fix the marked fields.", color="danger"))
@@ -388,21 +392,55 @@ def _login(app_name, email, password, countrycode, report_step):
 poll_login = register_job_view(LOGIN_PREFIX, LOGIN_JOB, "submit-form", "form_result", render_login, LOGIN_LOST_MESSAGE)
 
 
+class Cooldown:
+    """One caller per period. For the whole app, not per session: there is one account and the SMS all go to it."""
+
+    def __init__(self, seconds):
+        self.seconds = seconds
+        self._lock = threading.Lock()
+        self._claimed_at = None
+
+    def claim(self):
+        """Returns 0 if the caller may go on, else the seconds left."""
+        now = time.monotonic()
+        with self._lock:
+            if self._claimed_at is not None and now - self._claimed_at < self.seconds:
+                return int(self.seconds - (now - self._claimed_at)) + 1
+            self._claimed_at = now
+            return 0
+
+    def release(self):
+        with self._lock:
+            self._claimed_at = None
+
+
+# longer than SMS_TIMEOUT_IN_S: it also covers a request which is still running
+SMS_COOLDOWN = Cooldown(30)
+
+
 @dash_app.callback(
     Output("sms-demand-result", "children"),
-    Input("ask-sms", "n_clicks"))
-def askCode(n_clicks):  # pylint: disable=unused-argument
-    ctx = callback_context
-    if ctx.triggered:
-        try:
-            app.myp.remote_client.get_sms_otp_code()
-            return dbc.Alert("SMS sent", color="success")
-        except SmsRequestException as e:
-            return create_error_alert("The SMS could not be requested", [e.hint], e.details)
-        except Exception as e:
-            res = str(e)
-            return dbc.Alert(res, color="danger")
-    raise PreventUpdate()
+    Input("ask-sms", "n_clicks"),
+    prevent_initial_call=True,
+    running=[(Output("ask-sms", "disabled"), True, False)])
+def askCode(n_clicks):
+    # every SMS counts for the OTP limit of PSA: only a click sends one
+    if not n_clicks:
+        raise PreventUpdate()
+    seconds_left = SMS_COOLDOWN.claim()
+    if seconds_left:
+        return dbc.Alert("An SMS was requested a moment ago, it can take a little while to arrive. "
+                         f"You can ask for another one in {seconds_left} s.", color="info")
+    try:
+        app.myp.remote_client.get_sms_otp_code()
+        return dbc.Alert("SMS sent", color="success")
+    except SmsRequestException as e:
+        SMS_COOLDOWN.release()  # the page says to try again
+        return create_error_alert("The SMS could not be requested", [e.hint], e.details)
+    except Exception as e:
+        SMS_COOLDOWN.release()
+        res = str(e)
+        return dbc.Alert(res, color="danger")
 
 
 def _activate_otp(sms_code, code_pin, report_step):
@@ -451,8 +489,11 @@ def render_otp(state):
     State(f"{OTP_PREFIX}-job", "data"),
     prevent_initial_call=True,
     running=[(Output("finish-otp", "disabled"), True, False)])
-def finishOtp(n_clicks, code_pin, sms_code, stored=None):  # pylint: disable=unused-argument
+def finishOtp(n_clicks, code_pin, sms_code, stored=None):
     """Only starts the activation: an SMS code works once, an answer lost on the way must not cost a new one."""
+    if not n_clicks:
+        raise PreventUpdate()
+
     def work(report_step):
         return _activate_otp(sms_code, code_pin, report_step)
 

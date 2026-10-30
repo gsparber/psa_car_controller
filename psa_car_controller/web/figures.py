@@ -20,6 +20,8 @@ from psa_car_controller.web.tools.utils import card_value_div, dash_date_to_date
 
 ERROR_DIV = dbc.Alert("No data to show, there is probably no trips recorded yet", color="danger")
 PADDING_TOP = {"padding-top": "1em"}
+# wide tables scroll on their own, not the whole page
+SCROLL_INSIDE_TABLE = {"overflowX": "auto"}
 consumption_fig = ERROR_DIV
 consumption_df = ERROR_DIV
 trips_map = ERROR_DIV
@@ -81,6 +83,8 @@ def get_figures(car: Car):
     dist = units.distance_label(UNIT)
     consumption_label = units.consumption_label(UNIT)
     speed_label = units.speed_label(UNIT)
+    # Symbol.yes without a suffix would show the default symbol of the table: "$"
+    mileage_format = deepcopy(nb_format).symbol_suffix(f" {dist}").precision(0)
     style_cell_conditional = []
     if car.is_electric():
         style_cell_conditional.append({'if': {'column_id': 'consumption_fuel_km', }, 'display': 'None', })
@@ -91,6 +95,7 @@ def get_figures(car: Car):
         export_format=EXPORT_FORMAT,
         sort_action='custom',
         sort_by=[{'column_id': 'id', 'direction': 'desc'}],
+        style_table=SCROLL_INSIDE_TABLE,
         style_data={
             'width': '10%',
             'maxWidth': '10%',
@@ -111,7 +116,7 @@ def get_figures(car: Car):
                  {'id': 'distance', 'name': 'distance', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(f" {dist}").precision(1)},
                  {'id': 'mileage', 'name': f'mileage ({dist})', 'type': 'numeric',
-                  'format': nb_format},
+                  'format': mileage_format},
                  {'id': 'altitude_diff', 'name': 'altitude diff', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" m").precision(0)}
                  ],
@@ -149,6 +154,7 @@ def get_figures(car: Car):
         id='battery-table',
         export_format=EXPORT_FORMAT,
         sort_action='custom',
+        style_table=SCROLL_INSIDE_TABLE,
         style_data={
             'width': '10%',
             'maxWidth': '10%',
@@ -170,7 +176,7 @@ def get_figures(car: Car):
                  {'id': 'price', 'name': 'price', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" " + CURRENCY).precision(2), 'editable': True},
                  {'id': 'charging_mode', 'name': 'charging mode', 'type': 'text'},
-                 {'id': 'mileage', 'name': f'mileage ({dist})', 'type': 'numeric', 'format': nb_format},
+                 {'id': 'mileage', 'name': f'mileage ({dist})', 'type': 'numeric', 'format': mileage_format},
                  ],
         data=[],
         page_size=50,

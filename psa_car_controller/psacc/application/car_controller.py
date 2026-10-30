@@ -13,6 +13,7 @@ from .charge_control import ChargeControls
 from .charging import Charging
 from .ha_mqtt import HomeAssistantMqtt
 from psa_car_controller.common.sensitive_filter import sensitive_filter
+from psa_car_controller.psacc.model.car import describe_cars
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.utils.utils import Singleton
@@ -54,6 +55,9 @@ def parse_args():
 class PSACarController(metaclass=Singleton):
     CONNECTION_RETRY_DELAY = 60
     CONNECTION_RETRY_MAX_DELAY = 900
+    # a login and the reconnect button can run at the same time: one client and one mqtt connection at the end.
+    # A request that reads the app doesn't wait: it sees the old client or the complete new one.
+    _services_lock = threading.RLock()
 
     def __init__(self):
         self.args = parse_args()
@@ -70,6 +74,10 @@ class PSACarController(metaclass=Singleton):
         sensitive_filter.add_source(lambda: [self.config.Home_Assistant_MQTT.password])
 
     def start_remote_control(self):
+        with self._services_lock:
+            self.__start_remote_control()
+
+    def __start_remote_control(self):
         if self.args.remote_disable:
             logger.info("mqtt disabled")
         elif not self.args.web_conf or path.isfile(OTP_CONFIG_NAME):
@@ -93,6 +101,10 @@ class PSACarController(metaclass=Singleton):
                 logger.error("start_remote_control failed redo otp config: %s", e)
 
     def load_app(self) -> bool:
+        with self._services_lock:
+            return self.__load_app()
+
+    def __load_app(self) -> bool:
         my_logger(handler_level=int(self.args.debug))
         enable_raw_status_log(getattr(self.args, "log_raw_status", False))
 
@@ -158,7 +170,7 @@ class PSACarController(metaclass=Singleton):
 
     def __start_services(self):
         self.myp.manager.start_scheduled_refresh()
-        logger.info(str(self.myp.get_vehicles()))
+        logger.info("Your vehicles: %s", describe_cars(self.myp.get_vehicles()))
         if self.args.refresh:
             self.myp.start_refresh_thread()
         self.start_remote_control()

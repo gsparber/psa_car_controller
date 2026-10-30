@@ -11,6 +11,7 @@ from Cryptodome.Cipher import AES
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Hash import SHA256
 
+from psa_car_controller.common.utils import atomic_write
 from . import oaep
 from .load import IWData
 
@@ -330,8 +331,7 @@ def encode_oeap(text, key):
 
 
 def save_otp(obj, filename="otp.bin"):
-    with open(filename, 'wb') as output:
-        pickle.dump(obj, output)
+    atomic_write(filename, pickle.dumps(obj))
 
 
 class RenameUnpickler(pickle.Unpickler):

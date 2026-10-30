@@ -80,14 +80,6 @@ class TestAgeText(unittest.TestCase):
     def test_format_age_unknown(self):
         self.assertIsNone(status_text.format_age(None))
 
-    def test_updated_text(self):
-        updated_at = NOW - timedelta(minutes=5)
-        self.assertEqual(f"updated {updated_at.astimezone():%H:%M} (5 min ago)",
-                         status_text.updated_text(updated_at, 300, NOW))
-
-    def test_updated_text_without_date(self):
-        self.assertIsNone(status_text.updated_text(None, None))
-
     def test_outdated_text(self):
         self.assertIn("3 h ago", status_text.outdated_text(3 * 3600))
         self.assertEqual("No new data from the API", status_text.outdated_text(None))
