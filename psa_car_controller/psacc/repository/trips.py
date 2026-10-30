@@ -50,6 +50,41 @@ class Trips(list):
         return speed_average
 
     @staticmethod
+    def is_restart(start, end, distance, trip_parser: TripParser):
+        duration = (end["Timestamp"] - start["Timestamp"]).total_seconds() / 3600
+        speed_average = Trips.get_speed_average(distance, duration)
+        return TripParser.is_low_speed(speed_average, duration) or trip_parser.is_refuel(start, end, distance)
+
+    def close_trip(self, trip: Trip, start, end, trip_parser: TripParser):
+        logger.debugv("stop trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
+                      " level_fuel:{0[level_fuel]}", end, style='{')
+        trip.distance = end["mileage"] - start["mileage"]  # km
+        if trip.distance > 0:
+            trip.start_at = start["Timestamp"]
+            trip.end_at = end["Timestamp"]
+            trip.start_level = start["level"]
+            trip.end_level = end["level"]
+            trip.add_points(end["latitude"], end["longitude"])
+            if end["temperature"] is not None and start["temperature"] is not None:
+                trip.add_temperature(end["temperature"])
+            trip.duration = (end["Timestamp"] - start["Timestamp"]).total_seconds() / 3600
+            trip.speed_average = Trips.get_speed_average(trip.distance, trip.duration)
+            diff_level, diff_level_fuel = trip_parser.get_level_consumption(start, end)
+            trip.set_altitude_diff(start["altitude"], end["altitude"])
+            trip.car = trip_parser.car
+            if diff_level != 0:
+                trip.set_consumption(diff_level)  # kw
+            if diff_level_fuel != 0:
+                trip.set_fuel_consumption(diff_level_fuel)
+            trip.mileage = end["mileage"]
+            logger.debugv("Trip: {0.start_at} -> {0.end_at} {0.distance:.1f}km {0.duration:.2f}h "
+                          "{0.speed_average:.0f}km/h {0.consumption:.2f}kWh "
+                          "{0.consumption_km:.2f}kWh/100km {0.consumption_fuel:.2f}L "
+                          "{0.consumption_fuel_km:.2f}L/100km {0.mileage:.1f}km", trip, style="{")
+            # filter bad value
+            self.check_and_append(trip)
+
+    @staticmethod
     def get_trips(vehicles_list: Cars) -> Dict[str, "Trips"]:  # noqa: MC0001
         # pylint: disable=too-many-locals,too-many-statements,too-many-nested-blocks,too-many-branches
         conn = Database.get_db()
@@ -82,10 +117,7 @@ class Trips(list):
                         distance = end["mileage"] - start["mileage"]
                     except TypeError:
                         logger.debug("Bad mileage value in DB")
-                    duration = (end["Timestamp"] - start["Timestamp"]).total_seconds() / 3600
-                    speed_average = Trips.get_speed_average(distance, duration)
-
-                    if TripParser.is_low_speed(speed_average, duration) or trip_parser.is_refuel(start, end, distance):
+                    if Trips.is_restart(start, end, distance, trip_parser):
                         start = end
                         trip = Trip()
                         logger.debugv("restart trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
@@ -95,11 +127,13 @@ class Trips(list):
                         duration = (next_point["Timestamp"] - end["Timestamp"]).total_seconds() / 3600
                         speed_average = Trips.get_speed_average(distance, duration)
                         end_trip = False
+                        drive_in_gap = False
                         if trip_parser.is_refuel(end, next_point, distance) or \
                                 TripParser.is_low_speed(speed_average, duration):
                             end_trip = True
                         elif duration > 2:
                             end_trip = True
+                            drive_in_gap = True
                             logger.debugv("too much time detected")
                         elif x == len(res) - 3:  # last record detected
                             # think if add point is needed
@@ -107,37 +141,20 @@ class Trips(list):
                             end_trip = True
                             logger.debugv("last position found")
                         if end_trip:
-                            logger.debugv("stop trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
-                                          " level_fuel:{0[level_fuel]}", end, style='{')
-                            trip.distance = end["mileage"] - start["mileage"]  # km
-                            if trip.distance > 0:
-                                trip.start_at = start["Timestamp"]
-                                trip.end_at = end["Timestamp"]
-                                trip.start_level = start["level"]
-                                trip.end_level = end["level"]
-                                trip.add_points(end["latitude"], end["longitude"])
-                                if end["temperature"] is not None and start["temperature"] is not None:
-                                    trip.add_temperature(end["temperature"])
-                                trip.duration = (end["Timestamp"] - start["Timestamp"]).total_seconds() / 3600
-                                trip.speed_average = Trips.get_speed_average(trip.distance, trip.duration)
-                                diff_level, diff_level_fuel = trip_parser.get_level_consumption(start, end)
-                                trip.set_altitude_diff(start["altitude"], end["altitude"])
-                                trip.car = car
-                                if diff_level != 0:
-                                    trip.set_consumption(diff_level)  # kw
-                                if diff_level_fuel != 0:
-                                    trip.set_fuel_consumption(diff_level_fuel)
-                                trip.mileage = end["mileage"]
-                                logger.debugv("Trip: {0.start_at} -> {0.end_at} {0.distance:.1f}km {0.duration:.2f}h "
-                                              "{0.speed_average:.0f}km/h {0.consumption:.2f}kWh "
-                                              "{0.consumption_km:.2f}kWh/100km {0.consumption_fuel:.2f}L "
-                                              "{0.consumption_fuel_km:.2f}L/100km {0.mileage:.1f}km", trip, style="{")
-                                # filter bad value
-                                trips.check_and_append(trip)
+                            trips.close_trip(trip, start, end, trip_parser)
+                            if drive_in_gap:
+                                # Fast enough not to be a stop, so the car drove with no position but the last one.
+                                # A trip of its own: its start and duration only frame the drive.
+                                trips.close_trip(Trip(), end, next_point, trip_parser)
                             start = next_point
                             trip = Trip()
                         else:
                             trip.add_points(end["latitude"], end["longitude"])
                     end = next_point
+                # After a restart in the last round, or with only two positions, the loop never looked at the last pair.
+                # Everywhere else it leaves with start and end on the last position.
+                distance = end["mileage"] - start["mileage"]
+                if start is not end and not Trips.is_restart(start, end, distance, trip_parser):
+                    trips.close_trip(trip, start, end, trip_parser)
                 trips_by_vin[vin] = trips
         return trips_by_vin

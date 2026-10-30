@@ -5,7 +5,7 @@ from copy import copy
 from psa_car_controller.common.sensitive_filter import mask_value
 from psa_car_controller.common.utils import atomic_write
 from .car_model import DEFAULT_BATTERY_POWER, DEFAULT_FUEL_CAPACITY, DEFAULT_MAX_ELEC_CONSUMPTION, \
-    DEFAULT_MAX_FUEL_CONSUMPTION
+    DEFAULT_MAX_FUEL_CONSUMPTION, ElecModel
 from .car_status import CarStatus
 from ..repository.car_model import CarModelRepository
 
@@ -17,6 +17,14 @@ EMPTY_STATUS_LIMIT = 3
 UNKNOWN_MODEL_VALUES = {"battery_power": DEFAULT_BATTERY_POWER, "fuel_capacity": DEFAULT_FUEL_CAPACITY,
                         "max_elec_consumption": DEFAULT_MAX_ELEC_CONSUMPTION,
                         "max_fuel_consumption": DEFAULT_MAX_FUEL_CONSUMPTION}
+# engine code in the VIN (position 6 to 8) of the 1.2 Hybrid 136: car_models.yml has 0 kWh for two of these cars,
+# but they have a 48 V battery of about 0.9 kWh
+MILD_HYBRID_ENGINE_CODES = ("HPY",)
+
+
+def _is_pure_combustion(model) -> bool:
+    return not isinstance(model, ElecModel) and not model.battery_power and bool(model.fuel_capacity) \
+        and model.reg[5:8] not in MILD_HYBRID_ENGINE_CODES
 
 
 def _replace_unknown_model_values(data):
@@ -44,6 +52,13 @@ def _replace_unknown_model_values(data):
                                   for field, value in UNKNOWN_MODEL_VALUES.items()))
             return {key: value for key, value in data.items() if key not in UNKNOWN_MODEL_VALUES}
         return data
+    # a car without battery can't have 46 kWh on purpose: only that value is replaced, 0 stays on the next start
+    if data.get("battery_power") == DEFAULT_BATTERY_POWER and _is_pure_combustion(model):
+        logger.info("cars.json: %s has battery_power %s from the time its model was unknown, but %s has no battery:"
+                    " set to 0. Trips are computed when read, so old ones now count as a combustion car; charges"
+                    " already in the database keep the kw and price computed with %s kWh",
+                    mask_value(data["vin"]), DEFAULT_BATTERY_POWER, model.name, DEFAULT_BATTERY_POWER)
+        return {**data, "battery_power": 0}
     # Car() has renamed the car on a previous start, or the user has set abrp_name: from there 46 kWh can be
     # a leftover as well as the usable capacity entered on purpose
     if data.get("battery_power") == DEFAULT_BATTERY_POWER != model.battery_power \
@@ -80,7 +95,7 @@ class Car:
         self._status = None
         self._status_failures = 0
         self.abrp_name = abrp_name or model.abrp_name
-        self.battery_power = battery_power or model.battery_power
+        self.battery_power = battery_power or model.battery_power or 0
         self.fuel_capacity = fuel_capacity or model.fuel_capacity
         self.max_elec_consumption = max_elec_consumption or model.max_elec_consumption  # kwh/100Km
         self.max_fuel_consumption = max_fuel_consumption or model.max_fuel_consumption  # L/100Km

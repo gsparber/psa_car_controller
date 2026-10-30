@@ -254,9 +254,9 @@ class TestUnit(unittest.TestCase):
             for stored, values in (
                     # one value that isn't from the unknown model is enough, the label is still replaced as before
                     ({"battery_power": 50}, ("C4 Shine 2023", None, 50, 50, 70, 30)),
-                    ({"fuel_capacity": 45}, ("C4 Shine 2023", None, 46, 45, 70, 30)),
-                    ({"max_elec_consumption": 55}, ("C4 Shine 2023", None, 46, 50, 55, 30)),
-                    ({"max_fuel_consumption": 12}, ("C4 Shine 2023", None, 46, 50, 70, 12))):
+                    ({"battery_power": 46.5}, ("C4 Shine 2023", None, 46.5, 50, 70, 30)),
+                    ({"battery_power": 12, "label": "C4 Shine 2023", "fuel_capacity": 45},
+                     ("C4 Shine 2023", None, 12, 45, 70, 30))):
                 with self.subTest(stored=stored):
                     with self.assertNoLogs(logger_name, level="INFO"):
                         car = self._load_cars_json(path, **stored)
@@ -281,8 +281,13 @@ class TestUnit(unittest.TestCase):
             path = os.path.join(tmp, "cars.json")
             for vin, stored, values in (
                     # label replaced by a previous start, the tank came from the model
-                    ("VR7BAHNSBP1234567", {"label": "C4 Shine 2023", "fuel_capacity": 50},
-                     ("C4 Shine 2023", None, 46, 50, 70, 30)),
+                    ("VR3F3DGY2R1234567", {"label": "408 GT Hybrid 225", "fuel_capacity": 40},
+                     ("408 GT Hybrid 225", None, 46, 40, 70, 30)),
+                    # 0 kWh in car_models.yml, but a mild hybrid with a 48 V battery
+                    ("VR3KAHPY1R1234567", {"label": "3008-III", "fuel_capacity": 53},
+                     ("3008-III", None, 46, 53, 70, 30)),
+                    ("VR3FPHPY0S1234567", {"label": "408 GT 1.2 Petrol", "fuel_capacity": 52},
+                     ("408 GT 1.2 Petrol", None, 46, 52, 70, 30)),
                     ("VR3KCZKZ8R1234567", {"label": "e-5008", "abrp_name": "peugeot:e5008:25:77"},
                      ("e-5008", "peugeot:e5008:25:77", 46, 0, 70, 30)),
                     # abrp_name set by hand, as docs/abrp.md describes
@@ -294,6 +299,93 @@ class TestUnit(unittest.TestCase):
                     self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
                     self.assertNotIn(vin, logs.output[0])
                     self.assertIn("***" + vin[-4:], logs.output[0])
+
+    def test_cars_json_of_combustion_car_with_46_kwh_is_corrected(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        vin = self.UNKNOWN_CAR["vin"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for stored, expected in (
+                    # label replaced by a previous start, the tank came from the model
+                    ({"label": "C4 Shine 2023", "fuel_capacity": 50}, ("C4 Shine 2023", None, 0, 50, 70, 30)),
+                    ({"label": "C4 Shine 2023"}, ("C4 Shine 2023", None, 0, 50, 70, 30)),
+                    # the other values are the user's, they stay
+                    ({"fuel_capacity": 45}, ("C4 Shine 2023", None, 0, 45, 70, 30)),
+                    ({"max_elec_consumption": 55}, ("C4 Shine 2023", None, 0, 50, 55, 30)),
+                    ({"max_fuel_consumption": 12}, ("C4 Shine 2023", None, 0, 50, 70, 12)),
+                    ({"label": "C4 Shine 2023", "abrp_name": "own", "fuel_capacity": 50},
+                     ("C4 Shine 2023", "own", 0, 50, 70, 30)),
+                    ({"battery_power": 46.0, "label": "C4 Shine 2023"}, ("C4 Shine 2023", None, 0, 50, 70, 30))):
+                with self.subTest(stored=stored):
+                    with self.assertLogs(logger_name, level="INFO") as logs:
+                        car = self._load_cars_json(path, **stored)
+                    self.assertEqual(self._car_values(car), expected)
+                    self.assertEqual(car.precond_programs, {"program1": {}})
+                    self.assertTrue(car.is_thermal())
+                    self.assertFalse(car.is_hybrid())
+                    self.assertEqual([record.levelname for record in logs.records], ["INFO"])
+                    self.assertNotIn(vin, logs.output[0])
+                    self.assertIn("***" + vin[-4:], logs.output[0])
+                    self.assertIn("charges already in the database", logs.output[0])
+                    with open(path, encoding="utf-8") as file:
+                        saved = json.load(file)[0]
+                    self.assertEqual(tuple(saved[field] for field in self.CAR_VALUES), expected)
+                    # second start: nothing to correct, no log, the file stays as it is
+                    with open(path, encoding="utf-8") as file:
+                        content = file.read()
+                    with self.assertNoLogs(logger_name, level="INFO"):
+                        again = Cars.load_cars(path)[0]
+                    self.assertEqual(self._car_values(again), expected)
+                    with open(path, encoding="utf-8") as file:
+                        self.assertEqual(file.read(), content)
+
+    def test_cars_json_model_without_a_battery_value(self):
+        for battery_power, expected in ((None, 0), (0, 0)):
+            with self.subTest(battery_power=battery_power), tempfile.TemporaryDirectory() as tmp:
+                models = [CarModel("thermal", battery_power, 50, reg="VR7BAHNSBP")]
+                with patch.object(CarModelRepository(), "models", models):
+                    car = self._load_cars_json(os.path.join(tmp, "cars.json"), label="thermal", fuel_capacity=50)
+                self.assertEqual(car.battery_power, expected)
+                self.assertTrue(car.is_thermal())
+        # a key missing in car_models.yml falls back to 46 kWh, that's not "no battery"
+        yaml = ruamel.yaml.YAML()
+        yaml.register_class(CarModel)
+        models = yaml.load("- !CarModel\n  name: thermal\n  fuel_capacity: 50\n  reg: VR7BAHNSBP\n")
+        with tempfile.TemporaryDirectory() as tmp, patch.object(CarModelRepository(), "models", models):
+            car = self._load_cars_json(os.path.join(tmp, "cars.json"), label="thermal", fuel_capacity=50)
+        self.assertEqual(car.battery_power, 46)
+
+    def test_cars_json_correction_of_46_kwh_for_every_model(self):
+        def engine_code(model):
+            return model.reg[5:8]
+
+        models = CarModelRepository().models
+        self.assertEqual(len(models), 152)
+        corrected = []
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for model in models:
+                with self.subTest(model=model.name, reg=model.reg):
+                    car = self._load_cars_json(path, vin=model.reg.ljust(17, "0"), label=model.name,
+                                               fuel_capacity=model.fuel_capacity)
+                    if car.battery_power != 46:
+                        corrected.append(model)
+                        self.assertEqual(car.battery_power, 0)
+                        self.assertTrue(car.is_thermal())
+        self.assertEqual(len(corrected), 51)
+        # ElecModels aren't compared: "Vauxhall Corsa Electric" has the code of a petrol engine
+        hybrids = {engine_code(model) for model in models if model.battery_power and model.fuel_capacity}
+        for model in corrected:
+            with self.subTest(corrected=model.name, reg=model.reg):
+                self.assertIs(type(model), CarModel)
+                self.assertEqual(model.battery_power, 0)
+                self.assertGreater(model.fuel_capacity, 0)
+                self.assertNotRegex(model.name, "(?i)hybrid|phev|mhev|plug|tense|electric|^e-")
+                # same engine as a hybrid: a mild hybrid with wrong data, belongs in MILD_HYBRID_ENGINE_CODES
+                self.assertNotIn(engine_code(model), hybrids)
+        without_battery = [model.reg for model in models if not model.battery_power]
+        self.assertEqual(sorted(set(without_battery) - {model.reg for model in corrected}),
+                         ["VR3FPHPY0S", "VR3KAHPY1R"])
 
     def test_cars_json_with_another_chosen_model_is_not_changed(self):
         with tempfile.TemporaryDirectory() as tmp:
