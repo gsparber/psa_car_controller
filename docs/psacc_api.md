@@ -9,6 +9,11 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
    http://localhost:5000/get_vehicleinfo/YOURVIN?from_cache=1
 
+   Besides the fields of the PSA API, the answer has `data_age_seconds`: the seconds since the date of the status,
+   `null` if it has no date. A car that sleeps doesn't send anything, so an old status alone isn't an error. After
+   3 failed requests in a row, the answer is the last status received and has the header `X-Status-Outdated` with
+   the number of failed requests.
+
 3. Stop charge
 
    http://localhost:5000/charge_now/YOURVIN/0
@@ -66,6 +71,16 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 16. Get the vehicle charging sessions
    
    http://localhost:5000/vehicles/chargings
+
+   Charges PSACC didn't record (offline, rate limit, missing charging status) but the battery level between two
+   trips reveals are listed apart, this list above stays what was recorded:
+
+   http://localhost:5000/vehicles/chargings/estimated
+
+   Same fields with `"estimated": true`, but `start_at`/`stop_at` only frame the charge (end of the trip before,
+   start of the trip after), and `kw`, `price`, `co2` and `charging_mode` are `null` because they aren't known.
+   Gaps over 72 h are ignored, and so are rises of 2 % or less (more than 5 % if the car moved in between), which
+   regeneration or temperature can cause. They count in no total and have no charge curve.
 
 17. Get the vehicle trips:
    

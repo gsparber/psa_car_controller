@@ -81,6 +81,12 @@ class TestChargeControl(unittest.TestCase):
                 return MockEnergy()
 
         class MockCar:
+            status_outdated = False
+
+            @property
+            def status(self):
+                return MockStatus()
+
             def get_status(self):
                 return MockStatus()
 

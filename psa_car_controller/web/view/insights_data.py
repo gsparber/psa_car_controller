@@ -41,12 +41,20 @@ def trip_rows(trips):
 def charge_rows(chargings, vin=None):
     rows = []
     for charge in chargings or []:
-        if vin and charge.get("VIN", vin) != vin:
+        # the rows feed the totals: an estimated charge has no energy, it must not count as a charge of 0 kWh
+        if (vin and charge.get("VIN", vin) != vin) or charge.get("estimated"):
             continue
         rows.append({"start_at": _aware(charge.get("start_at")), "stop_at": _aware(charge.get("stop_at")),
                      "kw": _num(charge.get("kw")), "price": charge.get("price"),
                      "start_level": charge.get("start_level"), "end_level": charge.get("end_level")})
     return rows
+
+
+def estimated_charge_rows(chargings, vin=None):
+    """Estimated charges for display, keeping unknown values unknown. Never pass them to the totals."""
+    return [{"start_at": _aware(charge["start_at"]), "stop_at": _aware(charge["stop_at"]),
+             "start_level": charge["start_level"], "end_level": charge["end_level"], "estimated": True}
+            for charge in chargings or [] if not vin or charge["VIN"] == vin]
 
 
 def in_period(rows, period, now=None):

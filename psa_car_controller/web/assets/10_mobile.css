@@ -373,6 +373,15 @@ body {
   color: var(--bs-success-text-emphasis);
 }
 
+.status-outdated {
+  margin-top: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  color: var(--bs-warning-text-emphasis);
+  background: var(--bs-warning-bg-subtle);
+}
+
 .home-tiles {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

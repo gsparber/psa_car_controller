@@ -113,6 +113,8 @@ class Trips(list):
                             if trip.distance > 0:
                                 trip.start_at = start["Timestamp"]
                                 trip.end_at = end["Timestamp"]
+                                trip.start_level = start["level"]
+                                trip.end_level = end["level"]
                                 trip.add_points(end["latitude"], end["longitude"])
                                 if end["temperature"] is not None and start["temperature"] is not None:
                                     trip.add_temperature(end["temperature"])

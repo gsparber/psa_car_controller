@@ -32,7 +32,7 @@ def get_oauth_config_layout(redirect_url):
                     dbc.Label("Code", html_for="psa-oauth-code"),
                     dbc.Input(type="text", id="psa-oauth-code", placeholder="Enter login code"),
                     dbc.FormText(
-                        "PSA code from step above",
+                        "PSA code from step above, or the whole xxxx://oauth2redirect... URL",
                         color="secondary",
                     )]),
                 dbc.Row(dbc.Button("Submit", color="primary", id="finish-oauth")),

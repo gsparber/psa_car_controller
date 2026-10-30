@@ -1,18 +1,27 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from sqlite3 import IntegrityError
 
 from typing import List
 
 from .battery_charge_curve import BatteryChargeCurve
 from .ecomix import Ecomix
+from .trip_parser import TripParser
 
 from psa_car_controller.psacc.repository.config_repository import ElectricityPriceConfig
 from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.psacc.repository.trips import Trips
 from ..model.car import Car, Cars
 from ..model.charge import Charge
 
 logger = logging.getLogger(__name__)
+
+# over a longer gap the car may have been used without any record: the levels no longer say what happened in between
+MAX_ESTIMATED_CHARGE_GAP = timedelta(hours=72)
+
+
+def _as_utc(date):
+    return date.replace(tzinfo=timezone.utc) if date is not None and date.tzinfo is None else date
 
 
 class Charging:
@@ -24,6 +33,52 @@ class Charging:
         charge_list = list(map(dict, charge_db))
         Charging._calculated_fields(charge_list)
         return charge_list
+
+    @staticmethod
+    def _overlaps_charge(start, stop, chargings: List[dict]) -> bool:
+        # a charge without stop_at is still running. Touching counts: the status that ends a charge can carry the
+        # date of the first position of the next trip
+        for charge in chargings:
+            charge_start, charge_stop = _as_utc(charge["start_at"]), _as_utc(charge["stop_at"])
+            if charge_start is not None and charge_start <= stop and (charge_stop is None or charge_stop >= start):
+                return True
+        return False
+
+    @staticmethod
+    def estimate_chargings(trips: Trips, chargings: List[dict]) -> List[dict]:
+        """Charges the battery level between two trips of a car reveals and chargings (its recorded ones) don't cover.
+
+        They have the fields of a recorded charge, but start_at and stop_at only frame the charge (end of the trip
+        before it, start of the trip after it) and what was charged, its price and its co2 aren't known: None.
+        """
+        estimated = []
+        for before, after in zip(trips, trips[1:]):
+            if before.end_level is None or after.start_level is None:
+                continue
+            start, stop = _as_utc(before.end_at), _as_utc(after.start_at)
+            if stop - start > MAX_ESTIMATED_CHARGE_GAP:
+                continue
+            # mileage is known to 0.1 km, the rest of the difference is float noise
+            distance = round(after.mileage - after.distance - before.mileage, 1)
+            # same margin as for the trips: regeneration or temperature change the level by a few percent
+            if not TripParser.is_recharging(before.end_level - after.start_level, distance):
+                continue
+            if Charging._overlaps_charge(start, stop, chargings):
+                continue
+            estimated.append({"start_at": before.end_at, "stop_at": after.start_at, "VIN": before.car.vin,
+                              "start_level": before.end_level, "end_level": after.start_level,
+                              "mileage": before.mileage, "co2": None, "kw": None, "price": None,
+                              "charging_mode": None, "estimated": True})
+        return estimated
+
+    @staticmethod
+    def get_estimated_chargings(cars: Cars) -> List[dict]:
+        """Always computed from the positions, so these rows can't leak into anything reading the battery table."""
+        chargings = list(map(dict, Database.get_all_charge()))
+        estimated = []
+        for vin, trips in Trips.get_trips(cars).items():
+            estimated.extend(Charging.estimate_chargings(trips, [c for c in chargings if c["VIN"] == vin]))
+        return sorted(estimated, key=lambda charge: _as_utc(charge["start_at"]))
 
     @staticmethod
     def get_battery_curve(conn, charge, car) -> List[BatteryChargeCurve]:

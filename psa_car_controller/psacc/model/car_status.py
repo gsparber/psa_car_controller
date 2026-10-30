@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from psa_car_controller.psa.connected_car_api import Battery
 from psa_car_controller.psa.connected_car_api.models.energy import Energy
@@ -76,3 +76,14 @@ def status_updated_at(status: Status):
         return max(dates, default=None)
     except TypeError:  # naive and aware dates can't be compared
         return None
+
+
+def status_age_seconds(status: Status, now=None):
+    """Seconds since the date of a status, None if it has no date. The car's times are UTC."""
+    updated_at = status_updated_at(status)
+    if updated_at is None:
+        return None
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    # a clock running behind the car's must not make the data look like it comes from the future
+    return max(0, int(((now or datetime.now(timezone.utc)) - updated_at).total_seconds()))

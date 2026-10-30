@@ -15,8 +15,9 @@ from requests import RequestException
 from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psa.oauth import (OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient,
-                                          REJECTED_GRANT_RETRY_DELAY)
+                                          REJECTED_GRANT_RETRY_DELAY, SHARED_TOKEN_HINT, rejected_grant_hint)
 from psa_car_controller.psacc.application.psa_client import PSAClient
+from tests.test_remote_command_api import get_api_view
 
 
 def invalid_grant():
@@ -77,6 +78,34 @@ class TestRejectedGrant(unittest.TestCase):
         self.assertFalse(manager.rejected_grant_retry_due())
         reject(manager, REJECTED_GRANT_RETRY_DELAY + 1)
         self.assertTrue(manager.rejected_grant_retry_due())
+
+
+class TestSharedTokenHint(unittest.TestCase):
+
+    def test_a_rejected_grant_asks_about_other_tools(self):
+        self.assertIn(SHARED_TOKEN_HINT, rejected_grant_hint(invalid_grant()))
+
+    def test_other_errors_do_not(self):
+        self.assertEqual("", rejected_grant_hint(None))
+        self.assertEqual("", rejected_grant_hint(RequestException("down")))
+        self.assertEqual("", rejected_grant_hint(OAuthError(HTTPStatus.UNAUTHORIZED, "invalid_client")))
+
+    def test_it_is_logged_without_the_token(self):
+        manager = get_manager()
+        manager.refresh_token = "secret-refresh-token"
+        with patch.object(manager, "_refresh_token", side_effect=invalid_grant()), \
+                self.assertLogs("psa_car_controller.psa.oauth", level="ERROR") as logs:
+            refresh(manager)
+        self.assertIn(SHARED_TOKEN_HINT, logs.output[0])
+        self.assertNotIn("secret-refresh-token", logs.output[0])
+
+    def test_it_is_in_the_api_answer(self):
+        api_view = get_api_view()
+        with api_view.app.test_request_context():
+            response, status = api_view.handle_oauth_error(invalid_grant())
+            body = response.get_json()
+        self.assertEqual(503, status)
+        self.assertIn(SHARED_TOKEN_HINT, body["message"])
 
 
 class TestApiWithRejectedGrant(unittest.TestCase):

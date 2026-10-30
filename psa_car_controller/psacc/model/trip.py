@@ -31,6 +31,8 @@ class Trip:
         self.distance = None
         self.duration = None
         self.mileage = None
+        self.start_level = None
+        self.end_level = None
         self.car: Car = None
         self.altitude_diff = None
         self.temperatures = []

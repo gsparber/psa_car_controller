@@ -14,6 +14,7 @@ from psa_car_controller.common.utils import AuthenticationRequiredException, Rat
 from urllib3.exceptions import HTTPError
 
 from psa_car_controller.psa.RemoteClient import RemoteException
+from psa_car_controller.psa.oauth import rejected_grant_hint
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.application.vehicle_services import MAX_TRIPS_PAGES, UNSUPPORTED_STATUSES
 from psa_car_controller.psacc.application.car_controller import PSACarController
@@ -22,6 +23,7 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.app import app
 
 from psa_car_controller.psacc.model.car import Cars
+from psa_car_controller.psacc.model.car_status import status_age_seconds
 from psa_car_controller.psacc.repository.trips import Trips
 
 from psa_car_controller.psacc.application.charging import Charging
@@ -79,7 +81,7 @@ def handle_oauth_error(error):
     logger.error("API call rejected, OAuth error: %s", error)
     return jsonify({
         "error": "authentication_required",
-        "message": f"OAuth error, please reconnect from the config web page: {error}",
+        "message": f"OAuth error, please reconnect from the config web page: {error}.{rejected_grant_hint(error)}",
     }), 503
 
 
@@ -110,8 +112,10 @@ def get_vehicle_info(vin):
         # Every attempt failed upstream; say so rather than raising AttributeError.
         logger.warning("get_vehicle_info returned no data for %s", vin)
         return jsonify({"error": "no_data", "message": "No vehicle info available from the API"}), 502
+    data = info.to_dict()
+    data["data_age_seconds"] = status_age_seconds(info)
     response = app.response_class(
-        response=json.dumps(info.to_dict(), default=str),
+        response=json.dumps(data, default=str),
         status=200,
         mimetype='application/json'
     )
@@ -362,9 +366,19 @@ def get_chargings():
         return jsonify([])
 
 
+@app.route('/vehicles/chargings/estimated')
+def get_estimated_chargings():
+    try:
+        return jsonify(Charging.get_estimated_chargings(APP.myp.vehicles_list))
+    except (IndexError, TypeError, ValueError):
+        logger.debug("Failed to estimate chargings, there is probably not enough data yet:", exc_info=True)
+        return jsonify([])
+
+
 @app.route('/settings')
 def settings():
-    return json_response(APP.config.model_dump_json(exclude={"Home_Assistant_MQTT": {"password"}}))
+    return json_response(APP.config.model_dump_json(exclude={"Home_Assistant_MQTT": {"password"},
+                                                             "Login_Worker": {"url"}}))
 
 
 @app.route('/battery/soh/<string:vin>')

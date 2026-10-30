@@ -21,6 +21,9 @@ class ChargeControl:
     # the threshold they get rarer (#1130: a slow charge doesn't update the api for a long time,
     # and waking the car up every refresh only drains its 12V battery)
     MAX_WAKEUP_TIMEOUT = 60
+    # fewest minutes between two wakeups while the API doesn't answer: the car can't fix most of
+    # these failures, and its battery level stays unknown until the API answers again anyway
+    OUTDATED_WAKEUP_TIMEOUT = 30
 
     def __init__(self, psacc: PSAClient, vin, percentage_threshold, stop_hour):
         self.vin = vin
@@ -49,7 +52,11 @@ class ChargeControl:
         self.retry_count += 1
         sleep(ChargeControl.MQTT_TIMEOUT)
         vehicle_status = self.psacc.get_vehicle_info(self.vin)
-        status = vehicle_status.get_energy('Electric').charging.status
+        status = self._charging_status(vehicle_status)
+        if status is None or self.psacc.vehicles_list.get_car_by_vin(self.vin).status_outdated:
+            # sending the command again wouldn't tell more, the next refreshes decide
+            logger.warning("Can't check if the charge of %s changed, its status is unknown or outdated", self.vin)
+            return False
         if status in (FINISHED, DISCONNECTED):
             logger.warning("Car state isn't compatible with charging %s", status)
         if (status == INPROGRESS) != charge:
@@ -60,14 +67,24 @@ class ChargeControl:
         self.retry_count = 0
         return True
 
-    def force_update(self, vehicle_status):
+    @staticmethod
+    def _charging_status(vehicle_status):
+        """The charging status of the car, None if the API didn't send it."""
+        if vehicle_status is None:
+            return None
+        charging = vehicle_status.get_energy('Electric').charging
+        return None if charging is None else charging.status
+
+    def force_update(self, vehicle_status, outdated=False):
         # force update if the car doesn't send info during wakeup_interval() minutes. The time of
         # the last wakeup counts too: a car which doesn't answer keeps the old updated_at, so it was
         # woken up again on every refresh until the wakeup rate limit stopped it (#1130).
         now = datetime.utcnow().replace(tzinfo=pytz.UTC)
-        last_update = self.psacc.vehicles_list.get_car_by_vin(self.vin).get_status().get_energy('Electric').updated_at
-        minutes_since_update = (now - last_update).total_seconds() / 60
+        last_update = vehicle_status.get_energy('Electric').updated_at
+        minutes_since_update = float('inf') if last_update is None else (now - last_update).total_seconds() / 60
         interval = self.wakeup_interval(vehicle_status, minutes_since_update)
+        if outdated:
+            interval = max(interval, self.OUTDATED_WAKEUP_TIMEOUT)
         if minutes_since_update <= interval:
             return
         if self._last_wakeup is not None and (now - self._last_wakeup).total_seconds() <= 60 * interval:
@@ -115,28 +132,65 @@ class ChargeControl:
         return (self.percentage_threshold - level) * remaining_minutes / (100 - level)
 
     def __is_approaching_scheduled_time(self, now: datetime):
-        scheduled_hour, scheduled_minute = self.psacc.remote_client.get_charge_hour(self.vin)
+        try:
+            scheduled_hour, scheduled_minute = self.psacc.remote_client.get_charge_hour(self.vin)
+        except (AttributeError, TypeError):  # the API didn't send it
+            return False
         minutes_passed = now.hour * 60 + now.minute
         scheduled_minute_of_day = scheduled_hour * 60 + scheduled_minute
         return minutes_passed < scheduled_minute_of_day and scheduled_minute_of_day - minutes_passed < 30
 
+    def _advance_stop_hour(self, now: datetime):
+        # more than once if no status came in for days: the stop isn't sent once per missed day
+        while self._next_stop_hour < now:
+            self._next_stop_hour += timedelta(days=1)
+
+    def _stop_if_state_unknown(self, vehicle_status, over_threshold, now: datetime):
+        """No status tells whether the car charges, so stop it as if it did: that's harmless if it doesn't.
+
+        At most twice for each time the threshold is passed and once for each stop hour, as the car
+        has to be reached each time. charge_now() needs the charge hour of the car not to overwrite
+        it: without one, wait for a status (a stop hour stays due until then).
+        """
+        if not over_threshold:
+            self.retry_count = 0
+        charging = vehicle_status.get_energy('Electric').charging
+        if charging is None or charging.next_delayed_time is None:
+            logger.info("Charging status of %s is unknown, can't control its charge", self.vin)
+            return
+        if self._next_stop_hour is not None and self._next_stop_hour < now:
+            self._advance_stop_hour(now)
+            logger.info("it's time to stop the charge, if the car is charging")
+            self.control_charge_with_ack(False)
+        elif over_threshold and self.retry_count < 2:
+            logger.info("Charge threshold is reached, stop the charge if the car is charging")
+            self.control_charge_with_ack(False)
+
     def process(self):
         now = datetime.now()
         try:
-            vehicle_status = self.psacc.vehicles_list.get_car_by_vin(self.vin).get_status()
-            status = vehicle_status.get_energy('Electric').charging.status
+            car = self.psacc.vehicles_list.get_car_by_vin(self.vin)
+            vehicle_status = car.status
+            if vehicle_status is None:
+                logger.info("No status of %s yet, can't control its charge", self.vin)
+                return
+            status = self._charging_status(vehicle_status)
             level = vehicle_status.get_energy('Electric').level
+            outdated = car.status_outdated
             has_threshold = self.percentage_threshold < 100
-            hit_threshold = level >= self.percentage_threshold
+            # An outdated level says nothing: the car may have been driven and plugged in again since
+            # (and mqtt reports that charge but no level), so nothing is decided from it until the
+            # API answers. It only ever hides a reached threshold, while the car is woken up to fix that.
+            hit_threshold = not outdated and level is not None and level >= self.percentage_threshold
             if status == INPROGRESS:
-                logger.info("charging status of %s is %s, battery level: %d", self.vin, status, level)
-                self.force_update(vehicle_status)
+                logger.info("charging status of %s is %s, battery level: %s", self.vin, status, level)
+                self.force_update(vehicle_status, outdated)
                 if has_threshold and hit_threshold and self.retry_count < 2:
                     logger.info("Charge threshold is reached, stop the charge")
                     self.control_charge_with_ack(False)
                 elif self._next_stop_hour is not None:
                     if self._next_stop_hour < now:
-                        self._next_stop_hour += timedelta(days=1)
+                        self._advance_stop_hour(now)
                         logger.info("it's time to stop the charge")
                         self.control_charge_with_ack(False)
                     else:
@@ -151,9 +205,11 @@ class ChargeControl:
                 self.force_update(vehicle_status)
                 hour = now.hour - 1 if now.hour > 0 else 23
                 self.psacc.remote_client.change_charge_hour(self.vin, hour, 0)
+            elif status is None or outdated:
+                self._stop_if_state_unknown(vehicle_status, has_threshold and hit_threshold, now)
             else:
                 if self._next_stop_hour is not None and self._next_stop_hour < now:
-                    self._next_stop_hour += timedelta(days=1)
+                    self._advance_stop_hour(now)
                 self.retry_count = 0
         except (AttributeError, ValueError):
             logger.exception("Probably can't retrieve all information from API:")

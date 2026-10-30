@@ -673,7 +673,13 @@ class RemoteClient:
             charge_type = IMMEDIATE_CHARGE
         else:
             charge_type = DELAYED_CHARGE
-        hour, minute = self.get_charge_hour(vin)
+        try:
+            hour, minute = self.get_charge_hour(vin)
+        except (AttributeError, TypeError):
+            # The command has to carry a charge hour and the API didn't send the one of the car: a
+            # stop mustn't fail because of that. The hour just passed delays the charge the longest.
+            hour, minute = (datetime.now().hour - 1) % 24, 0
+            logger.warning("Charge hour of %s is unknown, setting it to %d:00", vin, hour)
         res = self.veh_charge_request(vin, hour, minute, charge_type)
         logger.info("charge_now: %s", res)
         return True

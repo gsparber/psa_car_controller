@@ -9,6 +9,7 @@ from dash.exceptions import PreventUpdate
 
 from psa_car_controller import __version__
 from psa_car_controller.psa.constants import BRAND, realm_info
+from psa_car_controller.psa.oauth import rejected_grant_hint
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
@@ -81,7 +82,8 @@ def _account(state):
         return [html.Div(row, className="list-group")]
     return [html.Div(row, className="list-group mb-3"),
             dbc.Alert([html.Strong("Login expired or rejected. "),
-                       "The car can't be read until you log in again."], color="danger"),
+                       "The car can't be read until you log in again."
+                       + rejected_grant_hint(read(lambda: _myp().manager.last_refresh_error))], color="danger"),
             html.Div(login_form(_brand(), country=country), className="card-block")]
 
 

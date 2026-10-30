@@ -64,6 +64,7 @@ You can modify a price manually in the dashboard. It can be useful if you use pu
 - [HomeAssistant](https://github.com/Flodu31/HomeAssistant-PeugeotIntegration)
 - Jeedom (Anyone can share the procedure ?)
 - You can send live car status to ABRP (A better Route Planner), see [this page](docs/abrp.md)
+- evcc, without giving it a token of its own, see [this page](docs/evcc.md)
 - [Grafana](https://github.com/flobz/psa_car_controller/issues/161)
 
 ## FAQ

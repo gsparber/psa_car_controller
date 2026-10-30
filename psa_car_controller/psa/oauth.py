@@ -4,12 +4,15 @@ import json
 import secrets
 import base64
 import random
+import re
+import string
 import threading
 import time
 from typing import Tuple
 
 from http import HTTPStatus
 from typing import Optional
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from oauth2_client.credentials_manager import CredentialManager, OAuthError, ServiceInformation
 from requests import Response, RequestException
@@ -33,6 +36,20 @@ MIN_SCHEDULED_REFRESH_DELAY = 30
 # (unreachable server, rate limit), plus up to REFRESH_RETRY_JITTER of random jitter
 REFRESH_RETRY_DELAYS = (60, 120, 300, 600, 900)
 REFRESH_RETRY_JITTER = 0.1
+# what a pasted authorization code tends to come wrapped in
+PASTE_WRAPPING = string.whitespace + "\"'`"
+# text around a URL would end up in its last query value, it goes through CODE_IN_TEXT instead
+UNQUOTED_URL_BREAK = re.compile(r"""[\s"'`]""")
+CODE_IN_TEXT = re.compile(r"""(?<![\w-])code["']?\s*[:=]\s*["']?([^"'`&\s,;}#)>]+)""", re.IGNORECASE)
+# a refresh replaces the refresh token, so a second tool using the same one gets it rejected
+SHARED_TOKEN_HINT = "Is another tool running with the same token? Each tool needs its own login."
+
+
+def rejected_grant_hint(error: Optional[Exception]) -> str:
+    """What to add to the message about a failed refresh, empty unless PSA rejected the grant."""
+    if isinstance(error, OAuthError) and error.error == "invalid_grant":
+        return " " + SHARED_TOKEN_HINT
+    return ""
 
 
 def refresh_retry_delay(failures: int) -> float:
@@ -48,6 +65,48 @@ def generate_sha256_pkce(length: int) -> Tuple[str, str]:
     encoded = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode('ascii')).digest())
     challenge = encoded.decode('ascii')[:-1]
     return verifier, challenge
+
+
+def _code_from_json(text: str) -> Optional[str]:
+    if not text.startswith("{"):
+        return None
+    try:
+        code = json.loads(text).get("code")
+    except ValueError:
+        return None
+    # a number here is an HTTP status from a login worker, not a code
+    return code if isinstance(code, str) else None
+
+
+def _code_from_url(text: str) -> Optional[str]:
+    if UNQUOTED_URL_BREAK.search(text):
+        return None
+    try:
+        url = urlsplit(text)
+    except ValueError:
+        return None
+    for part in (url.query, url.fragment):
+        codes = parse_qs(part).get("code")
+        if codes:
+            return codes[0]
+    return None
+
+
+def _code_from_text(text: str) -> Optional[str]:
+    match = CODE_IN_TEXT.search(text)
+    return unquote(match.group(1)) if match else None
+
+
+def extract_code(raw: Optional[str]) -> str:
+    """Find the authorization code in what a user pasted: the code itself, the redirect URL
+    (maybe URL-encoded as a whole), a JSON answer or a line of browser console text."""
+    text = (raw or "").strip(PASTE_WRAPPING)
+    decoded = unquote(text)
+    for candidate in (text, decoded):
+        code = _code_from_json(candidate) or _code_from_url(candidate) or _code_from_text(candidate)
+        if code:
+            return code
+    return decoded
 
 
 class OpenIdCredentialManager(CredentialManager):
@@ -87,7 +146,9 @@ class OpenIdCredentialManager(CredentialManager):
         return self.generate_authorize_url(self.redirect_uri, secrets.token_urlsafe(16),
                                            code_challenge=code_challenge, code_challenge_method="S256")
 
-    def connect_with_code(self, code: str):
+    def connect_with_code(self, code: Optional[str]):
+        # the message must not repeat the input: users paste a live code or a whole URL here
+        code = extract_code(code)
         if len(code) != 36:
             raise ValueError(f"Invalid code length: {len(code)} (expected 36)")
         self._token_request({"grant_type": 'authorization_code', "code": code,
@@ -174,7 +235,8 @@ class OpenIdCredentialManager(CredentialManager):
                 if self.needs_login:
                     logger.warning("The refresh token is still rejected, waiting for a new login: %s", e)
                 else:
-                    logger.error("Can't refresh token, please reconnect from the config web page: %s", e)
+                    logger.error("Can't refresh token, please reconnect from the config web page: %s.%s",
+                                 e, rejected_grant_hint(e))
                 self.grant_rejected_at = time.monotonic()
                 self.rejected_refresh_token = sent_refresh_token
                 break

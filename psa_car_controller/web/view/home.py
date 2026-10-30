@@ -8,6 +8,7 @@ from dash.exceptions import PreventUpdate
 
 from psa_car_controller.psacc.application.vehicle_picture import get_vehicle_picture
 from psa_car_controller.psacc.model.car import Car
+from psa_car_controller.psacc.model.car_status import status_age_seconds, status_updated_at
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
@@ -65,11 +66,12 @@ def _hero(car: Car, remote):
     elec = car.status.get_energy("Electric")
     fuel = car.status.get_energy("Fuel")
     unit = units.current()
-    updated = status_text.format_updated(read(lambda: elec.updated_at if car.has_battery() else fuel.updated_at))
+    age = status_age_seconds(car.status)
+    updated = status_text.updated_text(status_updated_at(car.status), age)
     state = status_text.car_state_text(read(lambda: car.status.ignition.type),
                                        read(car.status.is_moving),
                                        read(lambda: car.status.kinetic.speed), unit)
-    subtitle = " · ".join(filter(None, [state, f"updated {updated}" if updated else None]))
+    subtitle = " · ".join(filter(None, [state, updated]))
     charging = None
     if car.has_battery():
         ring = _soc_ring(elec.level, elec.autonomy, unit)
@@ -93,6 +95,8 @@ def _hero(car: Car, remote):
                       html.Small(subtitle, className="text-body-secondary")]),
             refresh,
         ], className="d-flex align-items-start"),
+        html.Div([html.I(className="bi bi-exclamation-triangle-fill me-1"), status_text.outdated_text(age)],
+                 className="status-outdated small") if car.status_outdated else None,
         html.Div([html.I(className="bi bi-incognito me-1"), privacy],
                  className="text-center text-body-secondary small privacy-line") if privacy else None,
         html.Div([picture, ring], className="hero-visual" + (" with-picture" if picture is not None else "")),

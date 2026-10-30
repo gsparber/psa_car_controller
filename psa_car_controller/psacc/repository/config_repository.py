@@ -46,6 +46,10 @@ password =
 tls = false
 discovery prefix = homeassistant
 base topic = psa_car_controller
+[Login Worker]
+# your own stelloauth worker, tried first at login, e.g. http://stelloauth:8080; empty: off
+# your account email and password are sent to it: only use a service you host yourself, with https unless it's local
+url =
 """
 
 
@@ -187,10 +191,16 @@ class HomeAssistantMqttConfig(SectionConfig):
         return bool(self.enabled and self.host)
 
 
+class LoginWorkerConfig(SectionConfig):
+    url: Optional[str] = None
+
+
 class ConfigRepository(BaseModel):
     General: GeneralConfig
     Electricity_config: ElectricityPriceConfig
     Home_Assistant_MQTT: HomeAssistantMqttConfig = Field(default_factory=HomeAssistantMqttConfig)
+    # the credentials go to this URL: the name keeps it out of reach of /settings/<section>, tests check it
+    Login_Worker: LoginWorkerConfig = Field(default_factory=LoginWorkerConfig)
 
     @staticmethod
     def _read_file(name):

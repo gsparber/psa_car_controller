@@ -118,6 +118,36 @@ def format_updated(updated_at, now=None):
     return f"{local.day} {local:%b %H:%M}"
 
 
+def format_age(seconds):
+    """How old data is ("5 min ago"), None if unknown."""
+    if not _is_number(seconds):
+        return None
+    minutes = int(seconds // 60)
+    if minutes < 1:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} h ago"
+    return f"{hours // 24} days ago"
+
+
+def updated_text(updated_at, age_seconds, now=None):
+    """Time and age of the data ("updated 10:12 (5 min ago)"), None without a date."""
+    updated = format_updated(updated_at, now)
+    if updated is None:
+        return None
+    age = format_age(age_seconds)
+    return f"updated {updated} ({age})" if age else f"updated {updated}"
+
+
+def outdated_text(age_seconds):
+    """Warning for a status kept because the API stopped answering."""
+    age = format_age(age_seconds)
+    return f"No new data from the API, last status from {age}" if age else "No new data from the API"
+
+
 def position(coordinates):
     """(latitude, longitude) from the car's GeoJSON coordinates [longitude, latitude, altitude], or None."""
     try:

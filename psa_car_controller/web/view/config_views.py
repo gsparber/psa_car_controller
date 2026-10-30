@@ -7,6 +7,8 @@ from dash.exceptions import PreventUpdate
 from psa_car_controller.psa.otp.otp import ActivationException, FAQ_ACTIVATION_URL, new_otp_session
 from psa_car_controller.psa.RemoteClient import SmsRequestException
 from psa_car_controller.psa.setup.headless_oauth import HeadlessOAuthError, get_oauth_code_headless
+from psa_car_controller.psa.setup.worker_oauth import (WorkerLoginError, get_oauth_code_from_worker,
+                                                       is_insecure_worker_url, worker_host)
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psa.setup.app_decoder import InitialSetup, MissingCustomerIdError
 from psa_car_controller.common.mylogger import LOG_FILE
@@ -27,9 +29,44 @@ BRANDS = [{"label": "Peugeot", "value": "com.psa.mym.mypeugeot"},
           {"label": "Vauxhall", "value": "com.psa.mym.myvauxhall"}]
 
 
+def _login_worker_url():
+    return (app.config.Login_Worker.url or "").strip()
+
+
+def _login_worker_notice():
+    """Tells before the submit that the credentials leave this app."""
+    worker_url = _login_worker_url()
+    if not worker_url:
+        return None
+    notice = [dbc.Alert(f"Your email and password will be sent to the login service {worker_host(worker_url)} "
+                        "(Login Worker in config.ini). Only use a service you host yourself.",
+                        color="info", className="small")]
+    if is_insecure_worker_url(worker_url):
+        notice.append(dbc.Alert("This login service is not local and uses http://: your password would cross the "
+                                "network unencrypted. Use https://.", color="danger", className="small"))
+    return html.Div(notice)
+
+
+def _code_from_worker(auth_url, email, password):
+    """Returns (code, None), or (None, what went wrong) when the next login method has to take over."""
+    worker_url = _login_worker_url()
+    if not worker_url:
+        return None, None
+    try:
+        return get_oauth_code_from_worker(worker_url, auth_url, email, password), None
+    except WorkerLoginError as e:
+        logger.warning("%s; trying the local browser", e)
+        return None, str(e)
+
+
+def _worker_error_note(worker_error):
+    return html.P(worker_error) if worker_error else None
+
+
 def login_form(brand=None, email=None, country=None):
     """PSA account login; the callbacks below handle it on the settings page and on /v1/config."""
     return dbc.Form([
+        _login_worker_notice(),
         html.Div(className="mb-3", children=[
             dbc.Label("Car Brand", html_for="psa-app"),
             dcc.Dropdown(id="psa-app", options=BRANDS, value=brand, clearable=False, searchable=False)]),
@@ -130,13 +167,17 @@ def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: dis
             logger.exception(e)
             return dbc.Alert(str(e), color="danger")
 
-        # Attempt automatic headless OAuth
+        # Attempt automatic login: the login worker if there is one, then headless OAuth
+        worker_error = None
         try:
-            code = get_oauth_code_headless(auth_url, email, password, scheme)
+            code, worker_error = _code_from_worker(auth_url, email, password)
+            if code is None:
+                code = get_oauth_code_headless(auth_url, email, password, scheme)
             INITIAL_SETUP.connect(code)
             return dbc.Alert(["Login successful! ",
                               html.A("Continue with remote control setup",
-                                     href=dash_app.get_relative_path("/config"))], color="success")
+                                     href=dash_app.get_relative_path("/config")),
+                              _worker_error_note(worker_error)], color="success")
         except MissingCustomerIdError as e:
             # the login worked, logging in again by hand would fail the same way
             return dbc.Alert(str(e), color="danger")
@@ -161,6 +202,7 @@ def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: dis
                 ]
             return dbc.Alert(
                 [
+                    _worker_error_note(worker_error),
                     html.P(str(e), className="fw-bold"),
                     html.P(["You can still finish the login by hand: ",
                             html.A("Go to login",
@@ -178,7 +220,8 @@ def connectPSA(n_clicks, app_name, email, password, countrycode):  # pylint: dis
         # Manual fallback
         redirect_uri = parse.quote(auth_url)
         return dbc.Alert(
-            ["Automatic login failed. Please complete manually: ",
+            [_worker_error_note(worker_error),
+             "Automatic login failed. Please complete manually: ",
              html.A("Go to login",
                     href=f"{dash_app.config.requests_pathname_prefix}config_connect?url={redirect_uri}")],
             color="warning"

@@ -23,6 +23,7 @@
   ```
 
   > If Playwright is not installed or the browser fails to start, automatic login falls back to the manual flow.
+  > If the browser gets rejected, you can use [your own login worker](login_worker.md).
 
 
 1.3 start the app:

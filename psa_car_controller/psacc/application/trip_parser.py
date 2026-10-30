@@ -1,12 +1,13 @@
-import logging
 from collections.abc import Callable
+
+from psa_car_controller.common.mylogger import CustomLogger
 from psa_car_controller.psacc.model.car import Car
 
 LEVEL = 5
 
 LEVEL_FUEL = 8
 
-logger = logging.getLogger(__name__)
+logger = CustomLogger.getLogger(__name__)
 
 
 class TripParser:

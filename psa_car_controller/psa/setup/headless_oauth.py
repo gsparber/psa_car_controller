@@ -20,8 +20,9 @@ PASSWORD_SELECTOR = '#gigya-login-form input[name="password"]'  # nosec dodgy: p
 SUBMIT_SELECTOR = '#gigya-login-form input[type="submit"]'
 REMEMBER_ME_SELECTOR = 'label[for="gigya-checkbox-remember"]'
 
-# ForgeRock AM consent page selectors
+# Consent page selectors: the id-dcr.<brand> page first, then ForgeRock AM
 AUTHORIZE_SELECTORS = [
+    '#consentbutton',
     'input[name="decision"][value="allow"]',
     'button[name="decision"][value="allow"]',
     '#allow',
@@ -34,6 +35,12 @@ AUTHORIZE_SELECTORS = [
 ]
 
 TIMEOUT_MS = 60_000
+# Whole flow, page load included: some brands need about 2 minutes for login and consent
+LOGIN_TIMEOUT_S = 180
+
+# Page Stellantis redirects to when the flow fails, e.g. an expired consent context
+OP_ERROR_PAGE = "OPErrorPage.php"
+SESSION_EXPIRED_MESSAGE = "The login took too long and the session expired, please try again."
 
 
 class HeadlessOAuthError(Exception):
@@ -59,6 +66,10 @@ class OAuthTimeout(RuntimeError):
     """Raised when the authorization code never arrived, with the likely reason."""
 
 
+class OAuthFlowError(RuntimeError):
+    """Raised when Stellantis ended the flow on its error page."""
+
+
 def _fill_credentials(page: Page, email, password):
     """Fill the login form. Assumes the form is already visible."""
     logger.info("Filling credentials")
@@ -74,7 +85,11 @@ def _fill_credentials(page: Page, email, password):
         logger.warning("Remember me checkbox not found")
     submit_button = page.locator(SUBMIT_SELECTOR)
     submit_button.click()
-    submit_button.wait_for(state="detached", timeout=10_000)
+    try:
+        submit_button.wait_for(state="detached", timeout=10_000)
+    except playwright_sync.TimeoutError:
+        # Either a slow page or a form error: get_code keeps polling and reports the latter
+        logger.info("Login form still present after submitting")
 
 
 def check_for_error(page):
@@ -82,29 +97,65 @@ def check_for_error(page):
         raise FormException(f"Authentication failed: {errors}")
 
 
-def get_code(page: Page, scheme: str, email: str, password: str) -> str:
-    """Wait for the OAuth code, handling login and consent pages as they appear.
+def _check_for_error_if_readable(page):
+    """Raise the error the login form displays, if the page can be read at the moment."""
+    try:
+        check_for_error(page)
+    except FormException:
+        raise
+    except Exception:  # pylint: disable=broad-except
+        logger.debug("Could not read form errors", exc_info=True)
+
+
+def parse_op_error(url: str):
+    """Return the user-facing error if url is the Stellantis error page, else None."""
+    parsed = urlparse(url)
+    if not parsed.path.endswith("/" + OP_ERROR_PAGE):
+        return None
+    query = parse_qs(parsed.query)
+    message = query.get("message", [""])[0]
+    if "expired" in message.lower() or "took too long" in message.lower():
+        return SESSION_EXPIRED_MESSAGE
+    if message:
+        return message
+    if error_code := query.get("code", [""])[0]:
+        return f"Stellantis reported error {error_code}"
+    return "Stellantis reported an unknown error"
+
+
+def get_code(page: Page, scheme: str, email: str, password: str, deadline: float) -> str:
+    """Wait until deadline for the OAuth code, handling login and consent pages as they appear.
 
     The Stellantis OAuth flow is driven by the Gigya JS SDK, which initializes
     asynchronously after the page loads. ``wait_until="networkidle"`` is
     unreliable here because the SDK has natural pauses that can be mistaken
     for network idle, causing ``goto`` to return before the login form is
-    rendered. Instead, this loop polls for one of three outcomes:
-    the login form (fill it and submit), a consent button (click it), or the
-    OAuth code in a redirected URL (return it).
+    rendered. Instead, this loop polls for one of four outcomes:
+    the login form (fill it and submit), a consent button (click it), the
+    OAuth code in a redirected URL (return it), or an error shown by the login
+    form or the Stellantis error page (raise it).
     """
     code = [None]
+    flow_error = [None]
 
-    def find_code_in_url(url):
-        if url.startswith(scheme + "://") and (code_found := parse_qs(urlparse(url).query).get("code", [None])[0]):
-            code[0] = code_found
-    page.on('request', lambda req: find_code_in_url(req.url))
+    def inspect_url(url):
+        if url.startswith(scheme + "://"):
+            if code_found := parse_qs(urlparse(url).query).get("code", [None])[0]:
+                code[0] = code_found
+        elif op_error := parse_op_error(url):
+            flow_error[0] = op_error
+    page.on('request', lambda req: inspect_url(req.url))
 
-    deadline = time.time() + 90
     credentials_filled = False
     while time.time() < deadline:
+        # The request listener misses a redirect that happened before it was registered
+        inspect_url(page.url)
         if code[0]:
             return code[0]
+        if flow_error[0]:
+            raise OAuthFlowError(flow_error[0])
+        if credentials_filled:
+            _check_for_error_if_readable(page)
 
         if not credentials_filled and page.is_visible(EMAIL_SELECTOR):
             _fill_credentials(page, email, password)
@@ -120,19 +171,14 @@ def get_code(page: Page, scheme: str, email: str, password: str) -> str:
         time.sleep(1)
 
     # Prefer the error message the login form itself displays (wrong password, ...)
-    try:
-        check_for_error(page)
-    except FormException:
-        raise
-    except Exception:  # pylint: disable=broad-except
-        logger.debug("Could not read form errors", exc_info=True)
+    _check_for_error_if_readable(page)
     raise OAuthTimeout(_timeout_reason(page, credentials_filled))
 
 
 def _timeout_reason(page: Page, credentials_filled: bool) -> str:
     """Explain, in user terms, why no authorization code was received."""
     if not credentials_filled:
-        return (f"the login form never appeared within 90s (last page: {page.url}). "
+        return (f"the login form never appeared within {LOGIN_TIMEOUT_S}s (last page: {page.url}). "
                 "The Stellantis site may be down, unreachable from this container, "
                 "or it served a captcha / anti-bot page.")
     if page.is_visible(EMAIL_SELECTOR):
@@ -184,8 +230,9 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
             page.on("console", on_console)
             page.on("response", on_response)
             page.on("popup", on_popup)
+            deadline = time.time() + LOGIN_TIMEOUT_S
             page.goto(auth_url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
-            return get_code(page, scheme, email, password)
+            return get_code(page, scheme, email, password, deadline)
         except (playwright_sync.TimeoutError, RuntimeError, FormException) as e:
             logger.warning("Automatic login failed: %s", e)
             logger.debug("Headless OAuth traceback", exc_info=e)

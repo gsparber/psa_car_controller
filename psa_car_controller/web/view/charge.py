@@ -7,6 +7,7 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from psa_car_controller.psacc.application.charging import Charging
+from psa_car_controller.psacc.model.car import Cars
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, status_text, ui
@@ -110,15 +111,40 @@ def _charge_row(charge, currency):
     ], className="list-group-item d-flex align-items-center")
 
 
+def _estimated_charge_row(charge):
+    """Only the levels are known, and the dates frame the charge: no duration, no energy, no cost."""
+    start, stop = charge["start_at"].astimezone(), charge["stop_at"].astimezone()
+    return html.Div([
+        html.I(className="bi bi-battery-half me-3"),
+        html.Div([html.Div(f"{ui.fmt(charge['start_level'])} → {ui.fmt(charge['end_level'])} %",
+                           className="fw-semibold"),
+                  html.Small(f"Between {start:%a %d %b, %H:%M} and {stop:%a %d %b, %H:%M}",
+                             className="text-body-secondary")],
+                 className="flex-grow-1"),
+        html.Span("Estimated", className="badge text-bg-secondary ms-2",
+                  title="Not recorded: the battery level rose between two trips"),
+    ], className="list-group-item d-flex align-items-center")
+
+
+def _estimated_charges(vin):
+    try:
+        return insights_data.estimated_charge_rows(Charging.get_estimated_chargings(Cars([get_car(vin)])), vin)
+    except (IndexError, TypeError, ValueError):
+        logger.debug("Can't estimate the charges of %s", vin, exc_info=True)
+        return []
+
+
 def _recent(vin):
     """Last charges only; totals and trends live on the Insights page."""
     charges = [c for c in insights_data.charge_rows(Charging.get_chargings(), vin) if c["start_at"]]
+    charges += _estimated_charges(vin)
     if not charges:
         return html.P("No charge recorded yet.", className="text-body-secondary")
     currency = read(lambda: app().config.General.currency, "€")
     recent = sorted(charges, key=lambda c: c["start_at"], reverse=True)[:RECENT_COUNT]
     return html.Div([
-        html.Div([_charge_row(c, currency) for c in recent], className="list-group"),
+        html.Div([_estimated_charge_row(c) if c.get("estimated") else _charge_row(c, currency) for c in recent],
+                 className="list-group"),
         html.Div(ui.link_row("bi-bar-chart-line", "Charging statistics", dash_app.get_relative_path("/insights")),
                  className="list-group mt-3"),
     ])
