@@ -11,8 +11,9 @@ class Avg {
     }
   }
 
+  // NaN without any value: what is calculated with it stays unknown, nbFormat shows that. 0 would be a value
   average () {
-    return this.total
+    return this.count > 0 ? this.total : NaN
   }
 
   static getAverageFromKey (array, key) {
@@ -40,8 +41,11 @@ const logger = (function () {
 
   return pub
 }())
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// see 00_language.js
+function language () {
+  return typeof window !== 'undefined' && window.psaccLanguage ? window.psaccLanguage.tag : undefined
+}
 
 function pad2 (nb) {
   return String(nb).padStart(2, '0')
@@ -64,17 +68,18 @@ function localHour (date) {
 }
 
 const LOCAL_TIME_FORMATS = {
-  // "Fri 30 Oct, 14:35"
-  datetime: date => `${DAY_NAMES[date.getDay()]} ${pad2(date.getDate())} ${MONTH_NAMES[date.getMonth()]}, ` +
-    localHour(date),
-  // "14:35" today, "30 Oct 14:35" otherwise
+  // en-GB "Fri 30 Oct, 14:35", de-AT "Fr., 30. Okt., 14:35", en-US "Fri, Oct 30, 02:35 PM"
+  datetime: date => date.toLocaleString(language(), {
+    weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+  }),
+  // only the time today, with the date otherwise
   updated: function (date) {
     if (localDay(date) === localDay(new Date())) {
-      return localHour(date)
+      return date.toLocaleTimeString(language(), { hour: '2-digit', minute: '2-digit' })
     }
-    return `${date.getDate()} ${MONTH_NAMES[date.getMonth()]} ${localHour(date)}`
+    return date.toLocaleString(language(), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
   },
-  locale: date => `${date.toLocaleTimeString()} ${date.toLocaleDateString()}`
+  locale: date => `${date.toLocaleTimeString(language())} ${date.toLocaleDateString(language())}`
 }
 
 function localTimeText (value, format) {
@@ -92,15 +97,48 @@ function localizeTimes (root) {
   })
 }
 
-if (typeof document !== 'undefined') {
-  // runs before the browser paints, for what the server sends and everything Dash adds or updates later
-  new MutationObserver(() => localizeTimes(document)).observe(document.documentElement, {
-    childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['datetime']
+function numberText (value, digits) {
+  return new Intl.NumberFormat(language(), { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value)
+}
+
+// the same for ui.fmt, which renders <data> with the number as the server writes it
+function localizeNumbers (root) {
+  Array.from(root.getElementsByClassName('local-number')).forEach(function (element) {
+    const value = Number(element.getAttribute('value'))
+    const text = numberText(value, Number(element.dataset.digits))
+    if (!isNaN(value) && element.textContent !== text) {
+      element.textContent = text
+    }
   })
 }
 
+function localizePage (root) {
+  localizeTimes(root)
+  localizeNumbers(root)
+}
+
+if (typeof document !== 'undefined') {
+  // runs before the browser paints, for what the server sends and everything Dash adds or updates later
+  new MutationObserver(() => localizePage(document)).observe(document.documentElement, {
+    childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['datetime', 'value']
+  })
+}
+
+// A new choice in the settings: charts take it when they are drawn again, on the next page
+function applyLanguage (setting) { // eslint-disable-line no-unused-vars
+  window.psaccLanguage.set(setting)
+  localizePage(document)
+}
+
+// The separators of the number columns, which the table takes in the format of d3
+function tableLocale () { // eslint-disable-line no-unused-vars
+  const parts = new Intl.NumberFormat(language()).formatToParts(1234567.5)
+  const part = type => (parts.find(item => item.type === type) || { value: '' }).value
+  return { decimal: part('decimal'), group: part('group') }
+}
+
 function addLocaleDate (data, dateKey) {
-  const dateOption = [undefined, { hour: 'numeric', minute: 'numeric' }]
+  const dateOption = [language(), { hour: 'numeric', minute: 'numeric' }]
   function dateToLocale (row, key) {
     if (row[key] === null || row[key] === undefined) { // a charge in progress has no stop yet
       row[key + '_str'] = ''
@@ -131,7 +169,7 @@ function localSliderMarks (marks) { // eslint-disable-line no-unused-vars
   const res = {}
   stamps.forEach(function (stamp) {
     const date = new Date(stamp * 1000)
-    let label = date.toLocaleDateString(undefined, { year: '2-digit', month: 'numeric', day: 'numeric' })
+    let label = date.toLocaleDateString(language(), { year: '2-digit', month: 'numeric', day: 'numeric' })
     if (step < 86400) {
       label += ` ${pad2(date.getHours())}h${step > 3600 ? '' : pad2(date.getMinutes())}`
     }
@@ -221,6 +259,8 @@ function updateFigures (data, oldFigure, x, y) {
   return figures
 }
 
+const TRIP_ZOOM = 12
+
 function updateMap (data, oldFigure, x, y, lastPos) {
   const trips = data.trips
   const figures = []
@@ -232,19 +272,24 @@ function updateMap (data, oldFigure, x, y, lastPos) {
     figure.data[0].lat = []
     figure.data[0].lon = []
     figure.data[0].hovertext = []
-    let trip = null
-    for (trip of trips) {
+    for (const trip of trips) {
       const xPos = trip.positions[xLabel]
       figure.data[0].lat.push(...xPos, null)
       figure.data[0].lon.push(...trip.positions[yLabel[0]], null)
       figure.data[0].hovertext.push(...Array(xPos.length).fill(trip[yLabel[1]]), null)
     }
-    if (trip) {
-      figure.layout.map.center.lat = lastPos.lat
-      figure.layout.map.center.lon = lastPos.lon
-      figure.data[1].lat = [lastPos.lat]
-      figure.data[1].lon = [lastPos.lon]
+    // null and not empty: plotly drops the map when no trace has an entry
+    figure.data[1].lat = [lastPos ? lastPos.lat : null]
+    figure.data[1].lon = [lastPos ? lastPos.lon : null]
+    if (lastPos) {
+      if (!figure.layout.map.center) {
+        figure.layout.map.zoom = TRIP_ZOOM
+      }
+      figure.layout.map.center = { lat: lastPos.lat, lon: lastPos.lon }
     }
+    // a layout from before the hint, kept by the service worker, has none
+    const hints = figure.layout.annotations || []
+    hints.forEach(hint => { hint.visible = !lastPos })
     console.log(xLabel, figure)
     figures.push(figure)
   })
@@ -276,16 +321,23 @@ function updateTables (data, tables) {
 }
 
 function nbFormat (nb) {
-  const nbStr = nb.toFixed(2)
-  const nbInt = nbStr.split('.')[0]
-  if (nbInt.length > 3) {
-    return nbInt
+  if (!Number.isFinite(nb)) {
+    return '–'
   }
-  return nbStr
+  return numberText(nb, Math.abs(nb) >= 1000 ? 0 : 2)
 }
 
 function updateCardsValue (data) {
-  const res = {}
+  // all of them: a range without data must not leave the values of the previous range in the cards
+  const res = {
+    avg_emission_kw: NaN,
+    avg_chg_speed: NaN,
+    avg_consum_kw: NaN,
+    elec_consum_kw: NaN,
+    avg_emission_km: NaN,
+    elec_consum_price: NaN,
+    avg_consum_price: NaN
+  }
   let avgPriceKw
   let avgC02 = new Avg(); let avgKw = new Avg(); const avgTime = new Avg()
   const avgPrice = new Avg()
@@ -372,21 +424,18 @@ function sortMultipleTable (sortParams, data, tables) {
   }
 }
 
+// The last point with a position, the car can report none. null without any: the map must not make one up
 function getLastPosition (trips) {
-  const lastPos = {}
-  if (Array.isArray(trips) && trips.length > 0) {
-    const lastTrip = trips.reduce(function (prev, current) {
-      return (prev.start_at > current.start_at) ? prev : current
-    })
-    console.log('lastTrip:', lastTrip)
-    lastPos.lat = lastTrip.positions.lat.at(-1)
-    lastPos.lon = lastTrip.positions.long.at(-1)
-  } else {
-    lastPos.lat = 40
-    lastPos.lon = 40
+  const newestFirst = [...trips].sort((a, b) => b.start_at - a.start_at)
+  for (const trip of newestFirst) {
+    const { lat, long } = trip.positions
+    for (let i = lat.length - 1; i >= 0; i--) {
+      if (typeof lat[i] === 'number' && typeof long[i] === 'number') {
+        return { lat: lat[i], lon: long[i] }
+      }
+    }
   }
-  console.log('last position:', lastPos)
-  return lastPos
+  return null
 }
 
 function filterAndSort (data, range, figures, p, log, sort, config) { // eslint-disable-line no-unused-vars

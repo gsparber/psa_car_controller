@@ -1,8 +1,10 @@
-import locale
 import logging
 import sys
 import threading
 from contextvars import ContextVar
+from functools import lru_cache
+from html import escape
+from pathlib import Path
 
 import dash_bootstrap_components as dbc
 from flask import Flask
@@ -16,6 +18,7 @@ try:
 except ImportError:
     from werkzeug import DispatcherMiddleware
 
+from psa_car_controller.common import language
 from psa_car_controller.common.mylogger import file_handler
 if sys.version_info >= (3, 8):
     import importlib
@@ -57,6 +60,17 @@ THEME_SCRIPT = """<script>(function () {
         apply()
         dark.addEventListener('change', apply)
       }())</script>"""
+
+
+# Language files of plotly: in the assets for the prefix and the service worker, but Dash must not link all of them
+PLOTLY_LOCALE_DIR = "plotly-locales"
+PLOTLY_LOCALE_FILES = r"^plotly-locale-.*\.js$"
+
+
+@lru_cache(maxsize=1)
+def plotly_locales():
+    files = (Path(__file__).parent / "assets" / PLOTLY_LOCALE_DIR).glob("plotly-locale-*.js")
+    return sorted(file.name[len("plotly-locale-"):-len(".js")] for file in files)
 
 
 _request_prefixes = ContextVar("psacc_request_prefixes", default=None)
@@ -106,8 +120,15 @@ class PwaDash(Dash):
             f'<link rel="apple-touch-icon" href="{self.get_asset_url("images/icon-180.png")}">',
             f'<link rel="icon" type="image/png" sizes="192x192" href="{self.get_asset_url("images/icon-192.png")}">',
             THEME_SCRIPT,
+            self._language_meta(),
         ])
         return super().interpolate_index(**kwargs)
+
+    def _language_meta(self):
+        """For assets/00_language.js. Read on every request: the setting can change while the app runs."""
+        return (f'<meta name="psacc-language" content="{language.current()}"'
+                f' data-plotly-locales="{" ".join(plotly_locales())}"'
+                f' data-plotly-locales-url="{escape(self.get_asset_url(PLOTLY_LOCALE_DIR + "/"))}">')
 
 
 LEGACY_PREFIX = "/v1"
@@ -157,18 +178,6 @@ def config_flask(title, base_path, debug: bool, host, port, reloader=False,
         raise RuntimeError("config_flask can only be called once per process")
     app = Flask(__name__)
     app.logger.addHandler(file_handler)
-    try:
-        lang = locale.getlocale()[0].split("_")[0]
-        locale.setlocale(locale.LC_TIME, ".".join(locale.getlocale()))  # make sure LC_TIME is set
-        if lang != "en":
-            locale_url = [f"https://cdn.plot.ly/plotly-locale-{lang}-latest.js"]
-        else:
-            locale_url = None
-    except (IndexError, locale.Error):
-        locale_url = None
-        logger.warning("Can't get language")
-    if unminified:
-        locale_url = ["assets/plotly-with-meta.js"]
     app.config["DEBUG"] = debug
     if base_path == "/":
         application = DispatcherMiddleware(app)
@@ -177,9 +186,9 @@ def config_flask(title, base_path, debug: bool, host, port, reloader=False,
         application = DispatcherMiddleware(Flask('dummy_app'), {base_path: app})
         requests_pathname_prefix = base_path + "/"
     dash_app = PwaDash(external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
-                       external_scripts=locale_url, title=title,
+                       external_scripts=["assets/plotly-with-meta.js"] if unminified else None, title=title,
                        server=app, requests_pathname_prefix=requests_pathname_prefix,
-                       suppress_callback_exceptions=True, meta_tags=META_TAGS)
+                       suppress_callback_exceptions=True, meta_tags=META_TAGS, assets_ignore=PLOTLY_LOCALE_FILES)
     dash_app.enable_dev_tools(debug)
     app.wsgi_app = MyProxyFix(dash_app, base_path)
     # keep this line

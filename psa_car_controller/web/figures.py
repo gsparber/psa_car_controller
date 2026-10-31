@@ -42,6 +42,10 @@ CURRENCY = "€"
 EXPORT_FORMAT = "csv"
 # display unit (km or mi), the data given to the figures has to be converted to it (units.convert_rows)
 UNIT = units.KM
+NO_POSITION_HINT = {"text": "No trip with a position to show", "visible": False, "showarrow": False,
+                    "xref": "paper", "yref": "paper", "x": 0.5, "y": 0.5,
+                    "font": {"size": 14, "color": "#212529"}, "bgcolor": "#fff", "bordercolor": "#dee2e6",
+                    "borderpad": 8}
 
 
 def get_summary_cards():
@@ -62,21 +66,20 @@ def get_summary_cards():
 
 def get_figures(car: Car):
     global consumption_fig, trips_map, consumption_fig_by_speed, table_fig, battery_table, consumption_fig_by_temp
-    lats = [42, 41]
-    lons = [1, 2]
-    names = ["undefined", "undefined"]
+    # updateMap of clientside.js fills it. Plotly draws no map for a trace without entries, null shows nothing on it.
+    # No center: the whole world until there is a position. updateMap takes that as the sign to zoom in.
     trips_map = go.Figure(go.Scattermap(
         mode="lines",
-        lat=lats, lon=lons,
-        hovertext=names,
+        lat=[None], lon=[None],
+        hovertext=[None],
         showlegend=False))
-    trips_map.update_layout(map={"style": "style.json", "zoom": 12,
-                                 "center": {"lat": lats[0], "lon": lons[0]}},
-                            margin={"t": 0, "b": 0, "l": 0, "r": 0})
+    trips_map.update_layout(map={"style": "style.json", "zoom": 1},
+                            margin={"t": 0, "b": 0, "l": 0, "r": 0},
+                            annotations=[NO_POSITION_HINT])
     trips_map.add_trace(go.Scattermap(
         mode="markers",
         marker={"symbol": "marker", "size": 20},
-        lon=[lons[0]], lat=[lats[0]],
+        lat=[None], lon=[None],
         showlegend=False, name="Last Position"))
     # table
     nb_format = Format(precision=2, scheme=Scheme.fixed, symbol=Symbol.yes, group=Group.yes)
@@ -85,6 +88,7 @@ def get_figures(car: Car):
     speed_label = units.speed_label(UNIT)
     # Symbol.yes without a suffix would show the default symbol of the table: "$"
     mileage_format = deepcopy(nb_format).symbol_suffix(f" {dist}").precision(0)
+    level_format = deepcopy(nb_format).symbol_suffix(" %").precision(0)
     style_cell_conditional = []
     if car.is_electric():
         style_cell_conditional.append({'if': {'column_id': 'consumption_fuel_km', }, 'display': 'None', })
@@ -138,7 +142,7 @@ def get_figures(car: Car):
     consumption_fig = px.histogram(x=[0], y=[1], title='Consumption of the car',
                                    histfunc="avg")
     consumption_fig.update_layout(yaxis_title=f"Consumption {consumption_label}", xaxis_title="date")
-    consumption_fig.update_xaxes(type="date", tickformat="%d/%m/%Y")
+    consumption_fig.update_xaxes(type="date", tickformat="%x")  # the date format of the plotly locale
 
     consumption_fig_by_speed = px.histogram(data_frame=[{"start_at": 1, "speed_average": 2}], x="start_at",
                                             y="speed_average", histfunc="avg",
@@ -167,8 +171,8 @@ def get_figures(car: Car):
                  {'id': 'duration_str', 'name': 'duration', 'type': 'text'},
                  {'id': 'duration_min', 'name': 'duration (min)', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" min").precision(0)},
-                 {'id': 'start_level', 'name': 'start level', 'type': 'numeric'},
-                 {'id': 'end_level', 'name': 'end level', 'type': 'numeric'},
+                 {'id': 'start_level', 'name': 'start level', 'type': 'numeric', 'format': level_format},
+                 {'id': 'end_level', 'name': 'end level', 'type': 'numeric', 'format': level_format},
                  {'id': 'co2', 'name': 'CO2', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(" g/kWh").precision(1)},
                  {'id': 'kw', 'name': 'consumption', 'type': 'numeric',

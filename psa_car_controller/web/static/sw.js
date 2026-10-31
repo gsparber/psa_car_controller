@@ -98,7 +98,7 @@ self.addEventListener('fetch', event => {
       event.respondWith(networkFirst(request))
     }
   } else if (request.method === 'GET' &&
-             ['cdn.jsdelivr.net', 'cdn.plot.ly', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname)) {
+             ['cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(url.hostname)) {
     event.respondWith(cacheFirst(request))
   }
 })

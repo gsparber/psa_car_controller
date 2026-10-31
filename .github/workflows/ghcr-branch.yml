@@ -33,6 +33,12 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
+        with:
+          # git describe needs the history and the tags
+          fetch-depth: 0
+      - name: Read git state
+        id: git
+        run: echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -60,6 +66,9 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          build-args: |
+            PSACC_GIT_VERSION=${{ steps.git.outputs.version }}
+            PSACC_GIT_REPO_URL=${{ github.server_url }}/${{ github.repository }}
           outputs: type=image,name=${{ steps.prep.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ steps.prep.outputs.pair }}
           cache-to: type=gha,mode=max,scope=${{ steps.prep.outputs.pair }}

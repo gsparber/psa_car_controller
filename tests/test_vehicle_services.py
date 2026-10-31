@@ -2,6 +2,7 @@
 
 The answers are mocked after the format the Home Assistant integration reads, no real account was at hand.
 """
+import re
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -14,7 +15,8 @@ from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.application.vehicle_services import REFRESH_PERIOD, RETRY_DELAY, VehicleServices, \
     parse_rights, supported_commands
 from psa_car_controller.psacc.model.car import Car, Cars
-from psa_car_controller.web.view import status_text
+from psa_car_controller.web.view import status_text, ui
+from tests.test_units import service_text
 from tests.test_status_refresh import get_client, get_status, VIN
 from tests.utils import get_web_view
 
@@ -305,12 +307,12 @@ class TestPSAClientServices(unittest.TestCase):
 class TestStatusText(unittest.TestCase):
 
     def test_maintenance(self):
-        self.assertEqual("12\u202f000 km · 150 days", status_text.maintenance_text({"mileage": 12000, "days": 150}))
-        self.assertEqual("1 day", status_text.maintenance_text({"mileage": None, "days": 1}))
+        self.assertEqual("12\u202f000 km · 150 days", service_text({"mileage": 12000, "days": 150}))
+        self.assertEqual("1 day", service_text({"mileage": None, "days": 1}))
         self.assertEqual("500 km overdue · 3 days overdue",
-                         status_text.maintenance_text({"mileage": -500, "days": -3}))
-        self.assertIsNone(status_text.maintenance_text(None))
-        self.assertIsNone(status_text.maintenance_text({"mileage": "x"}))
+                         service_text({"mileage": -500, "days": -3}))
+        self.assertIsNone(ui.next_service(None))
+        self.assertIsNone(ui.next_service({"mileage": "x"}))
 
     def test_privacy(self):
         self.assertIn("Private mode", status_text.privacy_text("Full"))
@@ -417,7 +419,7 @@ class TestHomePage(unittest.TestCase):
     def test_maintenance_and_private_mode(self):
         self.myp.vehicle_services.refresh(self.car)
         self.car.status.privacy.state = "Full"
-        page = text(self.home.render_status(self.car))
+        page = re.sub(" +", " ", text(self.home.render_status(self.car)))  # text() puts spaces between the children
         self.assertIn("Next service", page)
         self.assertIn("12\u202f000 km · 150 days", page)
         self.assertIn("Private mode is on", page)

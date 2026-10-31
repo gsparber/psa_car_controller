@@ -7,8 +7,6 @@ import threading
 from os import path
 from typing import Optional
 
-import psa_car_controller
-
 from .charge_control import ChargeControls
 from .charging import Charging
 from .ha_mqtt import HomeAssistantMqtt
@@ -23,7 +21,7 @@ from psa_car_controller.psa.oauth import refresh_can_recover
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME, ConfigException
 from psa_car_controller.psa.status_schema import enable_raw_status_log
 from psa_car_controller.common.utils import RateLimitException
-from psa_car_controller import __version__
+from psa_car_controller.common.build_version import app_version
 
 DEFAULT_NAME = "config.json"
 
@@ -47,7 +45,7 @@ def parse_args():
     parser.add_argument("-b", "--base-path", help="base path for web app", default="/")
     parser.add_argument("--log-raw-status", action='store_true',
                         help="log the raw vehicle status from the API once per vehicle (position and ids hidden)")
-    parser.add_argument('--version', action='version', version='PSACC {}'.format(psa_car_controller.__version__))
+    parser.add_argument('--version', action='version', version='PSACC {}'.format(app_version()))
 
     return parser.parse_args()
 
@@ -108,7 +106,7 @@ class PSACarController(metaclass=Singleton):
         my_logger(handler_level=int(self.args.debug))
         enable_raw_status_log(getattr(self.args, "log_raw_status", False))
 
-        logger.info("App version %s", __version__)
+        logger.info("App version %s", app_version())
         if self.args.config:
             self.config_name = self.args.config
         if path.isfile(self.config_name):

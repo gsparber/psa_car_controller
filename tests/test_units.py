@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
 from psa_car_controller.web import figures, units
-from psa_car_controller.web.view import status_text
+from psa_car_controller.web.view import status_text, ui
 from tests.utils import get_web_view
 
 TRIP = {"id": 1, "distance": 100.0, "mileage": 16093.44, "speed_average": 80.4672, "consumption_km": 16.0,
@@ -18,6 +18,10 @@ TRIP = {"id": 1, "distance": 100.0, "mileage": 16093.44, "speed_average": 80.467
 
 def _view(name):
     return get_web_view(name)
+
+
+def service_text(*args):
+    return "".join(getattr(child, "children", child) for child in ui.next_service(*args))
 
 
 def _suffix(column):
@@ -114,10 +118,10 @@ class TestStatusTextUnits(unittest.TestCase):
         self.assertEqual("Driving · 50 mph", status_text.car_state_text(None, True, 80.4672, "mi"))
 
     def test_maintenance(self):
-        self.assertEqual("16\u202f093 km · 30 days", status_text.maintenance_text({"mileage": 16093, "days": 30}))
+        self.assertEqual("16\u202f093 km · 30 days", service_text({"mileage": 16093, "days": 30}))
         self.assertEqual("10\u202f000 mi · 30 days",
-                         status_text.maintenance_text({"mileage": 16093.44, "days": 30}, "mi"))
-        self.assertEqual("1\u202f000 mi overdue", status_text.maintenance_text({"mileage": -1609.344}, "mi"))
+                         service_text({"mileage": 16093.44, "days": 30}, "mi"))
+        self.assertEqual("1\u202f000 mi overdue", service_text({"mileage": -1609.344}, "mi"))
 
 
 class TestPagesUnits(unittest.TestCase):
@@ -168,6 +172,13 @@ class TestPagesUnits(unittest.TestCase):
                 self.assertEqual(["", f" {unit}"], mileage["locale"]["symbol"])
                 self.assertEqual("$,.0f", mileage["specifier"])
                 self.assertEqual(f"mileage ({unit})", columns["mileage"]["name"])
+
+    def test_levels_are_percents(self):
+        figures.get_figures(Car("VR3UHZKX", "vid", "Peugeot"))
+        columns = {col["id"]: col for col in figures.battery_table.columns}
+        for level in ("start_level", "end_level"):
+            self.assertEqual(" %", _suffix(columns[level]))
+        self.assertEqual("$,.0f", columns["end_level"]["format"].to_plotly_json()["specifier"])
 
     def test_wide_tables_scroll_inside_not_the_page(self):
         figures.get_figures(Car("VR3UHZKX", "vid", "Peugeot"))

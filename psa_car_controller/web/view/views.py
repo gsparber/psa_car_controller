@@ -10,6 +10,7 @@ from dash.exceptions import PreventUpdate
 import time
 
 from psa_car_controller.common import utils
+from psa_car_controller.common.build_version import version_info
 from psa_car_controller.common.mylogger import CustomLogger
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.model.car import Cars, Car
@@ -83,14 +84,15 @@ def add_header(el, pathname="/"):
 
     desktop_active = pathname if pathname == "/v1/stats" else NAV_PARENT.get(pathname, pathname)
     phone_active = NAV_PARENT.get(pathname, pathname)
-    version, github_url = ui.version_info()
+    version, github_url = version_info()
     version_class = "app-version d-none d-md-inline"
     top_bar = html.Header([
         dcc.Link("PSA Car Controller", href=dash_app.get_relative_path("/"), className="app-title"),
         html.Nav(nav_links("top-nav-link", DESKTOP_NAV_ITEMS, desktop_active),
                  className="top-nav d-none d-md-flex"),
-        html.A(version, href=github_url, target="_blank", rel="noopener", className=version_class) if github_url
-        else html.Span(version, className=version_class),
+        html.A(version, href=github_url, title=version, target="_blank", rel="noopener",
+               className=version_class) if github_url
+        else html.Span(version, title=version, className=version_class),
     ], className="app-bar")
     bottom_bar = html.Nav(nav_links("bottom-nav-link", NAV_ITEMS, phone_active),
                           className="bottom-nav d-md-none")
@@ -264,12 +266,13 @@ def _load_trips():
         car = get_default_car()  # todo handle multiple car
         try:
             trips_by_vin = Trips.get_trips(Cars([car]))
-            trips = trips_by_vin[car.vin]
+            # not the ones of the last run when the positions are gone
+            trips = trips_by_vin.get(car.vin, Trips())
             if len(trips) > 0:
                 min_date = trips[0].start_at
                 max_date = trips[-1].start_at
                 figures.get_figures(trips[0].car)
-        except (KeyError, IndexError):
+        except IndexError:
             logger.info("No trips yet")
         chargings = Charging.get_chargings()
         if len(chargings) == 0:

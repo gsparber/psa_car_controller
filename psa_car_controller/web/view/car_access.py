@@ -67,6 +67,16 @@ def not_in_subscription():
                       className="d-block mt-3 text-body-secondary")
 
 
+def remote_hint(ready):
+    """Why the remote commands are locked, None when they aren't.
+    Not next to not_in_subscription(): without the right, a car with remote control on refuses the command too."""
+    if ready:
+        return None
+    hint = "Remote control is off. " + REMOTE_OFF_HINT if not app().remote_control else \
+        ["Remote control is not set up. ", dcc.Link("Open settings", href=dash_app.get_relative_path("/config"))]
+    return html.Small(hint, className="remote-hint d-block text-body-secondary")
+
+
 def maintenance(vin):
     services = getattr(app().myp, "vehicle_services", None)
     return services.maintenance(vin) if services is not None else None

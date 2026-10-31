@@ -33,5 +33,15 @@ You can modify some parameter with docker environment variable:
 |PSACC_OPTIONS    | add cli argurment               |
 |PSACC_GITHUB_TOKEN | optional, GitHub token for the version check of the application file, above 60 requests per hour |
 
+### Build arguments:
+A build from a branch has no release version. These optional arguments of `docker build` name its commit in the header, in Settings and in the log. A release ignores them.
+
+|argument           | description                                                                                 |
+|-------------------|---------------------------------------------------------------------------------------------|
+|PSACC_GIT_VERSION  | output of `git describe --tags --always --dirty`, letters, digits, `.`, `_` and `-` only     |
+|PSACC_GIT_REPO_URL | `https://` URL of the repository holding that commit; without it the version has no link     |
+
+Build the wheel in `dist/` from the same commit, else the image shows a commit it doesn't contain. Only pass the URL if the commit is pushed, else the link ends on a 404. Without Docker, set the same names as environment variables.
+
 
 

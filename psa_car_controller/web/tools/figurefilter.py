@@ -113,6 +113,9 @@ def set_clientside_callback(dash_app, table_ids: list, figure_ids: list):
         *[Input(table_id, 'sort_by') for table_id in table_ids],
         State(PARAMS_STORE, 'data'))
     for table_id in table_ids:
+        dash_app.clientside_callback("function(_) { return tableLocale() }",
+                                     Output(table_id, 'locale_format'),
+                                     Input('clientside-data-store', 'data'))
         dash_app.clientside_callback(
             f"function(sortBy) {{ return skipUnsorted('{table_id}', sortBy) }}",
             Output(table_id, 'sort_by'),

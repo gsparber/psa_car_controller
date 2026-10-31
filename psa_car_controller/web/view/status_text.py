@@ -3,6 +3,7 @@
 Adapted from angelangelov88/psa_car_controller (feature/setup-ui, web/view/status_text.py). Values
 come in metric; distances and speeds are shown in the unit passed in (see web/units.py).
 """
+import math
 from datetime import datetime, timezone
 
 from psa_car_controller.common.utils import parse_hour
@@ -21,7 +22,7 @@ IGNITION_ON = ("Start", "StartUp")
 
 
 def _is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def format_int(value, unit=""):
@@ -78,10 +79,6 @@ def charge_power_kw(rate_kmh, battery_kwh, level, range_km):
         return None
     kwh_per_km = battery_kwh * level / 100 / range_km
     return rate_kmh * kwh_per_km
-
-
-def format_power(kw):
-    return f"≈{kw:.1f} kW"
 
 
 def precond_text(status):
@@ -152,22 +149,6 @@ def position(coordinates):
 
 def map_link_url(latitude, longitude):
     return f"https://www.google.com/maps/search/?api=1&query={latitude:.6f},{longitude:.6f}"
-
-
-def maintenance_text(maintenance, unit=units.KM):
-    """Distance and days left until the next service, e.g. "12 000 km · 150 days"; None when unknown.
-
-    Both can be negative once the service is overdue."""
-    if not maintenance:
-        return None
-    parts = []
-    mileage, days = maintenance.get("mileage"), maintenance.get("days")
-    if _is_number(mileage):
-        parts.append(format_distance(mileage, unit) if mileage >= 0 else f"{format_distance(-mileage, unit)} overdue")
-    if _is_number(days):
-        unit = "day" if abs(days) == 1 else "days"
-        parts.append(f"{format_int(days, unit)}" if days >= 0 else f"{format_int(-days, unit)} overdue")
-    return " · ".join(parts) or None
 
 
 def privacy_text(state):

@@ -1,4 +1,5 @@
 """Totals and time series for the insights and charge pages, free of Dash so they can be unit tested."""
+import math
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
@@ -16,8 +17,12 @@ def _aware(date):
     return date
 
 
+def _known(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def _num(value):
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+    return value if _known(value) else 0
 
 
 def period_start(period, now=None):
@@ -45,7 +50,7 @@ def charge_rows(chargings, vin=None):
         if (vin and charge.get("VIN", vin) != vin) or charge.get("estimated"):
             continue
         rows.append({"start_at": _aware(charge.get("start_at")), "stop_at": _aware(charge.get("stop_at")),
-                     "kw": _num(charge.get("kw")), "price": charge.get("price"),
+                     "kw": charge.get("kw"), "price": charge.get("price"),
                      "start_level": charge.get("start_level"), "end_level": charge.get("end_level")})
     return rows
 
@@ -70,14 +75,15 @@ def trip_totals(trips):
 
 
 def charge_totals(charges):
-    energy = sum(c["kw"] for c in charges)
-    priced = [c for c in charges if isinstance(c["price"], (int, float))]
+    # charges without a known energy (still running) can't add to it, and only they make no total of 0 kWh
+    energy = sum(_num(c["kw"]) for c in charges) if not charges or any(_known(c["kw"]) for c in charges) else None
+    priced = [c for c in charges if _known(c["price"])]
     cost = sum(c["price"] for c in priced)
-    priced_energy = sum(c["kw"] for c in priced)
+    priced_energy = sum(_num(c["kw"]) for c in priced)
     durations = [(c["stop_at"] - c["start_at"]).total_seconds() / 3600 for c in charges
                  if c["stop_at"] and c["start_at"] and c["stop_at"] > c["start_at"]]
     hours = sum(durations)
-    charged_with_duration = sum(c["kw"] for c in charges if c["stop_at"] and c["start_at"]
+    charged_with_duration = sum(_num(c["kw"]) for c in charges if c["stop_at"] and c["start_at"]
                                 and c["stop_at"] > c["start_at"])
     return {"energy": energy, "count": len(charges), "cost": cost if priced else None,
             "price_per_kwh": cost / priced_energy if priced_energy else None,

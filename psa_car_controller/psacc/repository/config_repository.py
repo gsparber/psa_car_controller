@@ -6,10 +6,11 @@ from datetime import datetime, timezone, timedelta
 from statistics import mean, StatisticsError
 
 from configupdater import ConfigUpdater
-from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler
+from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, field_validator
 from pydantic_core import core_schema
 from typing import Any, List, Optional
 
+from psa_car_controller.common import language
 from psa_car_controller.common.utils import atomic_write
 from psa_car_controller.psacc.application.battery_charge_curve import BatteryChargeCurve
 from psa_car_controller.psacc.model.charge import Charge
@@ -26,6 +27,8 @@ export_format = csv
 minimum trip length =
 # km or mi: unit of distances, speeds and consumptions on the web pages, recorded data stays in km
 length unit = km
+# language of charts, dates and numbers on the web pages, e.g. de-AT; auto takes the one of the browser
+language = auto
 [Electricity config]
 # price by kw/h
 day price =
@@ -116,8 +119,14 @@ class SectionConfig(BaseModel):
 class GeneralConfig(SectionConfig):
     currency: str = "€"
     length_unit: str = "km"
+    language: str = language.AUTO
     minimum_trip_length: float = 10
     export_format: str = "csv"
+
+    @field_validator("language")
+    @classmethod
+    def known_language(cls, value):
+        return language.normalize(value)
 
 
 class ElectricityPriceConfig(SectionConfig):

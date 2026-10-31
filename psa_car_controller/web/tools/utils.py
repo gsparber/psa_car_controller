@@ -36,7 +36,7 @@ def get_marks_from_start_end(start, end):
     return None
 
 
-def card_value_div(card_id, unit, value="-"):
+def card_value_div(card_id, unit, value="–"):
     return html.Div([html.Div(value, id=card_id, className="me-2"), html.Div(unit)],
                     className="d-flex flex-row justify-content-center")
 

@@ -1,24 +1,15 @@
 """Small building blocks shared by the mobile pages."""
+import math
+
 import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import dcc, html
 from dash.dependencies import Output
 
-from psa_car_controller import __version__
+from psa_car_controller.web import units
 
 TOAST = "app-toast"
 TOAST_OUTPUTS = ("children", "header", "icon", "is_open")
-RELEASES_URL = "https://github.com/flobz/psa_car_controller/releases/tag/"
-# pyproject.toml holds 0.0.0, only release.yml sets the real one; unknown means not installed as a package
-DEV_VERSIONS = ("0.0.0", "unknown")
-
-
-def version_info():
-    """Text and release page of the running version; a dev build has no tag to link to."""
-    if __version__ in DEV_VERSIONS:
-        return "dev build", None
-    version = "v" + __version__
-    return version, RELEASES_URL + version
 
 
 def toast():
@@ -76,11 +67,52 @@ def info_row(icon, label, value, href=None):
     return html.Div(content, className="list-group-item d-flex align-items-center")
 
 
+def _known(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def fmt(value, digits=0):
-    """Number for a tile: "–" when unknown, thin space grouping."""
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    """A number in the language of the browser, clientside.js replaces text; "–" when unknown."""
+    if not _known(value):
         return "–"
-    return f"{value:,.{digits}f}".replace(",", " ")
+    return html.Data(f"{value:,.{digits}f}".replace(",", " "), value=str(value), className="local-number",
+                     **{"data-digits": digits})
+
+
+def with_unit(value, unit, digits=0):
+    """fmt with a unit, "–" alone when unknown. Children of a component, not text."""
+    number = fmt(value, digits)
+    return [number, f" {unit}"] if number != "–" else number
+
+
+def distance(km, unit):
+    """A distance stored in km as a whole number in the display unit."""
+    return with_unit(units.distance(km, unit), units.distance_label(unit))
+
+
+def next_service(maintenance, unit=units.KM):
+    """Distance and days left until the next service, e.g. "12 000 km · 150 days"; None when unknown.
+    Both can be negative once the service is overdue. Children of a component, not text."""
+    if not maintenance:
+        return None
+    mileage, days = maintenance.get("mileage"), maintenance.get("days")
+    parts = []
+    if _known(mileage):
+        parts.append((distance(abs(mileage), unit), mileage))
+    if _known(days):
+        parts.append((with_unit(abs(days), "day" if abs(days) == 1 else "days"), days))
+    children = []
+    for number, value in parts:
+        if children:
+            children.append(" · ")
+        children.extend(number)
+        if value < 0:
+            children.append(" overdue")
+    return children or None
+
+
+def power(kw):
+    return ["≈", fmt(kw, 1), " kW"]
 
 
 def period_chips(chip_id, periods, value):

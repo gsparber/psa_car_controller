@@ -18,6 +18,15 @@ STEP = timedelta(minutes=10)
 CARS = Cars([car])
 
 
+def plain_text(component):
+    if isinstance(component, (list, tuple)):
+        return "".join(plain_text(child) for child in component)
+    if isinstance(component, str):
+        return component
+    children = getattr(component, "children", None)
+    return plain_text(children) if children is not None else ""
+
+
 def get_views():
     return get_web_view("api"), get_web_view("charge")
 
@@ -183,7 +192,7 @@ class EstimatedChargingTest(unittest.TestCase):
         charge_view = get_views()[1]
         with patch.object(charge_view, "get_car", return_value=car), \
                 patch.object(charge_view, "app", side_effect=AttributeError):
-            return str(charge_view._recent(car.vin))  # pylint: disable=protected-access
+            return plain_text(charge_view._recent(car.vin))  # pylint: disable=protected-access
 
     def test_charge_page_marks_estimates_without_inventing_values(self):
         _, stop_at = two_trips()

@@ -3,10 +3,12 @@ import logging
 from os import path
 
 import dash_bootstrap_components as dbc
-from dash import dcc, html
+from dash import dcc, html, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
+from psa_car_controller.common import language
+from psa_car_controller.common.build_version import version_info
 from psa_car_controller.psa.constants import BRAND, realm_info
 from psa_car_controller.psa.oauth import rejected_grant_hint
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME
@@ -24,6 +26,8 @@ STATE_STORE = "settings-state"
 POLL = "settings-poll"
 RECONNECT = "settings-reconnect"
 UNITS = "settings-units"
+LANGUAGE = "settings-language"
+LANGUAGE_SAVED = "settings-language-saved"
 
 # account states
 NO_ACCOUNT, LOGIN_FAILED, LOGGED_IN = "none", "failed", "ok"
@@ -170,8 +174,31 @@ def set_length_unit(unit):
     return True
 
 
+def _language():
+    return ui.section("Language", [
+        dbc.Select(id=LANGUAGE, value=language.current(),
+                   options=[{"label": label, "value": key} for key, label in language.LANGUAGES.items()]),
+        dcc.Store(id=LANGUAGE_SAVED),
+        html.Small("For charts, dates and numbers on all pages. The texts of the app stay in English.",
+                   className="text-body-secondary d-block")])
+
+
+def set_language(value):
+    """Saves the language in config.ini (General / language); False when it can't be written."""
+    config = app().config
+    previous = config.General.language
+    config.General.language = value
+    try:
+        config.write_config()
+    except (OSError, ValueError):
+        logger.exception("Can't save the language")
+        config.General.language = previous
+        return False
+    return True
+
+
 def _more():
-    version, url = ui.version_info()
+    version, url = version_info()
     return ui.section("More", [html.Div([
         ui.link_row("bi-journal-text", "Log", dash_app.get_relative_path("/log")),
         ui.link_row("bi-sliders", "Advanced setup (classic)", dash_app.get_relative_path("/v1/config")),
@@ -187,6 +214,7 @@ def get_settings_layout():
         dcc.Interval(id=POLL, interval=10 * 1000),
         html.Div(render(state), id=CONTENT),
         _units(),
+        _language(),
         _more(),
     ], className="page")
 
@@ -218,3 +246,21 @@ def change_units(unit):
     if not set_length_unit(unit):
         return ui.toast_message("Can't save the setting, see the log", ok=False)
     return ui.toast_message("Units: " + ("miles" if units.normalize(unit) == units.MI else "kilometres"))
+
+
+@dash_app.callback(*ui.toast_outputs(), Output(LANGUAGE_SAVED, "data"), Input(LANGUAGE, "value"),
+                   prevent_initial_call=True)
+def change_language(value):
+    if not value or value == language.current():
+        raise PreventUpdate
+    if value not in language.LANGUAGES:
+        logger.warning("Unknown language %r from the settings page", value)
+        return (*ui.toast_message("Unknown language", ok=False), no_update)
+    if not set_language(value):
+        return (*ui.toast_message("Can't save the setting, see the log", ok=False), no_update)
+    return (*ui.toast_message("Language: " + language.LANGUAGES[value]), value)
+
+
+# only once it is saved: a choice that failed would look applied until the next page
+dash_app.clientside_callback("function (value) { applyLanguage(value) }", Input(LANGUAGE_SAVED, "data"),
+                             prevent_initial_call=True)

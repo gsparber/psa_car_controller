@@ -92,7 +92,6 @@ class TestPagesLeaveTheDateToTheBrowser(unittest.TestCase):
         config.myp.vehicles_list = [car]
         with patch.object(control.Database, "get_last_soh_by_vin", return_value=None), \
                 patch.object(control, "units", MagicMock()), \
-                patch.object(control, "convert_value_to_str", return_value="1"), \
                 patch.object(control, "Button") as button, patch.object(control, "Switch"):
             button.return_value.get_html.return_value = html.Div()
             control.get_control_tabs(config)
@@ -131,8 +130,9 @@ class TestInsightsBars(unittest.TestCase):
 class TestClientside(unittest.TestCase):
 
     @staticmethod
-    def run_js(expression, time_zone):
-        script = ("const vm = require('vm'); const fs = require('fs');"
+    def run_js(expression, time_zone, language="en-GB"):
+        script = (f"globalThis.window = {{console, psaccLanguage: {{tag: {json.dumps(language)}}}}};"
+                  "const vm = require('vm'); const fs = require('fs');"
                   f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
                   f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
         result = subprocess.run(["node", "-e", script], env={**os.environ, "TZ": time_zone, "LANG": "en_US.UTF-8"},
@@ -160,7 +160,7 @@ class TestClientside(unittest.TestCase):
     def test_updated_format(self):
         expression = ("[localTimeText(new Date(Date.now()).toISOString(), 'updated').length,"
                       "localTimeText('2020-01-05T23:30:00Z', 'updated')]")
-        self.assertEqual([5, "6 Jan 00:30"], self.run_js(expression, "Europe/Vienna"))
+        self.assertEqual([5, "6 Jan, 00:30"], self.run_js(expression, "Europe/Vienna"))
 
     def test_tables_get_a_local_field_for_the_charts(self):
         expression = ("(() => { const data = {trips: [{start_at: '2026-10-29T23:30:00+00:00'}]};"
@@ -179,7 +179,7 @@ class TestClientside(unittest.TestCase):
     def test_slider_marks(self):
         expression = ("localSliderMarks({1793316600: {label: 'x'}, 1793320200: {label: 'y'}, 1793323800: {label: 'z'}})")
         marks = self.run_js(expression, "America/New_York")
-        self.assertRegex(marks["1793316600"]["label"], r"^10/2[0-9]/26 \d\dh\d\d$")
+        self.assertRegex(marks["1793316600"]["label"], r"^2[0-9]/10/26 \d\dh\d\d$")
         self.assertIsNone(self.run_js("localSliderMarks(null)", "Europe/Vienna"))
 
     def bars(self, spec, time_zone):

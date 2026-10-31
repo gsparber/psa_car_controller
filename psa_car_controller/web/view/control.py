@@ -20,13 +20,6 @@ CHARGE_SWITCH = "charge-switch"
 PRECONDITIONING_SWITCH = "preconditioning-switch"
 
 
-def convert_value_to_str(value):
-    try:
-        return str(int(value))
-    except TypeError:
-        return "-"
-
-
 def _at_click(config, method):
     """A button keeps the callback of its first build and a login replaces the client: look it up at the click."""
     def call(*args):
@@ -45,20 +38,17 @@ def get_control_tabs(config):
         buttons_row = []
         if car.status is not None:
             unit = units.current()
-            cards = OrderedDict({"Battery SOC": {"text": [card_value_div("battery_value", "%",
-                                                                         value=convert_value_to_str(
-                                                                             car.status.get_energy('Electric').level))],
+            cards = OrderedDict({"Battery SOC": {"text": [card_value_div("battery_value", "%", value=ui.fmt(
+                                                 car.status.get_energy('Electric').level))],
                                                  "src": dash_app.get_asset_url("images/battery-charge.svg")},
                                  "Mileage": {"text": [card_value_div("mileage_value", units.distance_label(unit),
-                                                                     value=convert_value_to_str(units.distance(
+                                                                     value=ui.fmt(units.distance(
                                                                          car.status.timed_odometer.mileage, unit)))],
                                              "src": dash_app.get_asset_url("images/mileage.svg")}
                                  })
             soh = Database.get_last_soh_by_vin(car.vin)
             if soh:
-                cards["Battery SOH"] = {"text": [card_value_div("battery_soh_value", "%",
-                                                                value=convert_value_to_str(
-                                                                    soh))],
+                cards["Battery SOH"] = {"text": [card_value_div("battery_soh_value", "%", value=ui.fmt(soh))],
                                         "src": dash_app.get_asset_url("images/battery-soh.svg")}
                 cards.move_to_end("Mileage")
             el.append(dbc.Container(dbc.Row(children=create_card(cards)), fluid=True))

@@ -11,7 +11,7 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.psa import precond_programs
 from psa_car_controller.web.view import status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    command_supported, is_pending, is_preconditioning, not_in_subscription, read, remote_ready
+    command_supported, is_pending, is_preconditioning, not_in_subscription, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +40,14 @@ def _status(car, pending):
     failure = read(lambda: car.status.preconditionning.air_conditioning.failure_cause)
     label = [dbc.Spinner(size="sm", spinner_class_name="me-2"), "Waiting for car…"] if waiting else \
         [html.I(className="bi bi-power me-2"), "Turn climate off" if precond_on else "Turn climate on"]
+    remote = remote_ready()
     return html.Div([
         html.Div([html.I(className="bi bi-snow me-2"), "Climate ", html.Strong(state)], className="fs-5"),
         html.Small(f"Last failure: {status_text.precond_failure_text(failure)}",
                    className="text-danger") if failure else None,
-        action_button("precond", car.vin, label, color="secondary" if precond_on else "primary",
-                      className="w-100 mt-3 big-button", disabled=waiting or not remote_ready())
-        if command_supported(car.vin, "/ThermalPrecond") else not_in_subscription(),
+        *([action_button("precond", car.vin, label, color="secondary" if precond_on else "primary",
+                         className="w-100 mt-3 big-button", disabled=waiting or not remote), remote_hint(remote)]
+          if command_supported(car.vin, "/ThermalPrecond") else [not_in_subscription()]),
     ], className="card-block")
 
 
@@ -89,6 +90,7 @@ def _programs(car):
     if precond_programs.is_default(programs):
         note = html.Small("No schedule received from the car yet. Saving replaces the schedules stored in the car.",
                           className="text-body-secondary d-block mb-2")
+    remote = remote_ready()
     return [dcc.Store(id=VISIBLE, data=visible),
             note,
             html.P("No schedule. Add one to have the cabin warm or cool when you leave.", id=EMPTY,
@@ -98,7 +100,8 @@ def _programs(car):
                                 color="secondary", outline=True, className="w-100 mb-3 add-button"),
                      id=ADD_WRAP, hidden=all(visible)),
             dbc.Button("Save schedules", id=SAVE, color="primary", className="w-100 big-button", n_clicks=0,
-                       disabled=not remote_ready())]
+                       disabled=not remote),
+            remote_hint(remote) if command_supported(car.vin, "/ThermalPrecond") else None]
 
 
 def get_climate_layout():

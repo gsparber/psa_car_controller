@@ -12,7 +12,7 @@ from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    command_supported, is_charging, is_pending, not_in_subscription, read, remote_ready
+    command_supported, is_charging, is_pending, not_in_subscription, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +45,16 @@ def _status(car, pending):
     label = [dbc.Spinner(size="sm", spinner_class_name="me-2"), "Waiting for car…"] if waiting else \
         [html.I(className="bi bi-stop-circle me-2" if charging_now else "bi bi-play-circle me-2"),
          "Stop charging" if charging_now else "Start charging"]
+    remote = remote_ready()
     return html.Div([
         html.Div([
-            html.Div([html.Span(status_text.format_int(elec.level, "%"), className="stat-value"),
-                      html.Span(status_text.format_distance(elec.autonomy, units.current()),
-                                className="ms-2 text-body-secondary")]),
-            html.Div([text, f" · {status_text.format_power(power)}" if power else None], className="charging-line"),
+            html.Div([html.Span(ui.with_unit(elec.level, "%"), className="stat-value"),
+                      html.Span(ui.distance(elec.autonomy, units.current()), className="ms-2 text-body-secondary")]),
+            html.Div([text, " · ", *ui.power(power)] if power else [text], className="charging-line"),
         ]),
-        action_button("charge", car.vin, label, color="danger" if charging_now else "primary",
-                      className="w-100 mt-3 big-button", disabled=waiting or not remote_ready())
-        if command_supported(car.vin, "/VehCharge") else not_in_subscription(),
+        *([action_button("charge", car.vin, label, color="danger" if charging_now else "primary",
+                         className="w-100 mt-3 big-button", disabled=waiting or not remote), remote_hint(remote)]
+          if command_supported(car.vin, "/VehCharge") else [not_in_subscription()]),
     ], className="card-block")
 
 
@@ -99,10 +99,10 @@ def _charge_row(charge, currency):
     else:
         length = "in progress"
     when = [ui.local_datetime(charge["start_at"]), f" · {length}"]
-    levels = f"{ui.fmt(charge['start_level'])} → {ui.fmt(charge['end_level'])} %"
-    price = charge["price"]
-    cost = f" · {ui.fmt(price, 2)} {currency}" if isinstance(price, (int, float)) else ""
-    energy = f"{ui.fmt(charge['kw'], 1)} kWh{cost}"
+    levels = [ui.fmt(charge['start_level']), " → ", ui.fmt(charge['end_level']), " %"]
+    price = ui.with_unit(charge["price"], currency, 2)
+    cost = [" · ", *price] if price != "–" else []
+    energy = [*ui.with_unit(charge['kw'], "kWh", 1), *cost]
     return html.Div([
         html.I(className="bi bi-battery-charging me-3"),
         html.Div([html.Div(levels, className="fw-semibold"), html.Small(when, className="text-body-secondary")],
@@ -115,7 +115,7 @@ def _estimated_charge_row(charge):
     """Only the levels are known, and the dates frame the charge: no duration, no energy, no cost."""
     return html.Div([
         html.I(className="bi bi-battery-half me-3"),
-        html.Div([html.Div(f"{ui.fmt(charge['start_level'])} → {ui.fmt(charge['end_level'])} %",
+        html.Div([html.Div([ui.fmt(charge['start_level']), " → ", ui.fmt(charge['end_level']), " %"],
                            className="fw-semibold"),
                   html.Small(["Between ", ui.local_datetime(charge["start_at"]), " and ",
                               ui.local_datetime(charge["stop_at"])], className="text-body-secondary")],

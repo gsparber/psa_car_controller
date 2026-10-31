@@ -49,8 +49,8 @@ def _trip_row(trip, unit):
     return html.Div([
         html.I(className="bi bi-geo me-3"),
         html.Div(ui.local_datetime(trip["start_at"]), className="flex-grow-1 text-nowrap"),
-        html.Div([html.Div(f"{ui.fmt(trip['distance'], 1)} {units.distance_label(unit)}", className="fw-semibold"),
-                  html.Small(f"{ui.fmt(trip['consumption_km'], 1)} {units.consumption_label(unit)}",
+        html.Div([html.Div(ui.with_unit(trip['distance'], units.distance_label(unit), 1), className="fw-semibold"),
+                  html.Small(ui.with_unit(trip['consumption_km'], units.consumption_label(unit), 1),
                              className="text-body-secondary")],
                  className="text-end"),
     ], className="list-group-item d-flex align-items-center")

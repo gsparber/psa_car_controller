@@ -13,8 +13,8 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import status_text, ui
-from psa_car_controller.web.view.car_access import PENDING_STORE, REMOTE_OFF_HINT, action_button, app, car_select, \
-    command_supported, get_car, is_charging, is_pending, is_preconditioning, maintenance, read, remote_ready
+from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, command_supported, \
+    get_car, is_charging, is_pending, is_preconditioning, maintenance, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,14 @@ def _soc_ring(level, range_km, unit=units.KM):
     value = level if isinstance(level, (int, float)) else 0
     return html.Div(
         html.Div([
-            html.Div(status_text.format_int(level, "%"), className="soc-value"),
-            html.Div(status_text.format_distance(range_km, unit), className="soc-range"),
+            html.Div(ui.with_unit(level, "%"), className="soc-value"),
+            html.Div(ui.distance(range_km, unit), className="soc-range"),
         ], className="soc-inner"),
         className="soc-ring",
         style={"--soc": value},
         role="img",
-        **{"aria-label": f"Battery {level} percent, range {status_text.format_distance(range_km, unit)}"},
+        **{"aria-label": f"Battery {status_text.format_int(level, 'percent')}, "
+                         f"range {status_text.format_distance(range_km, unit)}"},
     )
 
 
@@ -89,7 +90,7 @@ def _hero(car: Car, remote):
         power = status_text.charge_power_kw(read(lambda: elec.charging.charging_rate), car.battery_power,
                                             elec.level, elec.autonomy) if is_charging(car) else None
         if power:
-            charging = f"{charging} · {status_text.format_power(power)}"
+            charging = [f"{charging} · ", *ui.power(power)]
     else:
         ring = _soc_ring(fuel.level, fuel.autonomy, unit)
     picture = _picture(car)
@@ -111,8 +112,7 @@ def _hero(car: Car, remote):
         html.Div([picture, ring], className="hero-visual" + (" with-picture" if picture is not None else "")),
         html.Div([html.I(className="bi bi-lightning-charge-fill me-1" if is_charging(car) else "bi bi-plug me-1"),
                   charging], className="text-center charging-line") if charging else None,
-        html.Div(f"Fuel {status_text.format_int(fuel.level, '%')} · "
-                 f"{status_text.format_distance(fuel.autonomy, unit)}",
+        html.Div(["Fuel ", *ui.with_unit(fuel.level, "%"), " · ", *ui.distance(fuel.autonomy, unit)],
                  className="text-center text-body-secondary") if car.is_hybrid() else None,
     ], className="home-hero")
 
@@ -132,28 +132,20 @@ def _tiles(car: Car, remote, pending):
     if command_supported(car.vin, "/ThermalPrecond"):
         tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
                            pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
-    actions = html.Div(tiles, className="home-tiles")
-    if not app().remote_control:
-        return html.Div([actions, html.Small("Remote control is off. " + REMOTE_OFF_HINT,
-                                             className="text-body-secondary")])
-    if not remote:
-        return html.Div([actions, html.Small(["Remote control is not set up. ",
-                                              dcc.Link("Open settings", href=dash_app.get_relative_path("/config"))],
-                                             className="text-body-secondary")])
-    return actions
+    return html.Div([html.Div(tiles, className="home-tiles"), remote_hint(remote)])
 
 
 def _info(car: Car):
     unit = units.current()
     info = [ui.info_row("bi-speedometer2", "Mileage",
-                        status_text.format_distance(read(lambda: car.status.timed_odometer.mileage), unit))]
-    service = status_text.maintenance_text(maintenance(car.vin), unit)
+                        ui.distance(read(lambda: car.status.timed_odometer.mileage), unit))]
+    service = ui.next_service(maintenance(car.vin), unit)
     if service:
         info.append(ui.info_row("bi-wrench-adjustable", "Next service", service))
     if car.has_battery():
         soh = read(lambda: Database.get_last_soh_by_vin(car.vin))
         if soh:
-            info.append(ui.info_row("bi-heart-pulse", "Battery health", status_text.format_int(soh, "%")))
+            info.append(ui.info_row("bi-heart-pulse", "Battery health", ui.with_unit(soh, "%")))
         chc = read(lambda: app().chc.get(car.vin))
         if chc:
             stop = chc.get_stop_hour()

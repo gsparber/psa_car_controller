@@ -38,4 +38,8 @@ COPY /docker_files/init.sh /init.sh
 # /health only fails (503) once the MQTT broker keeps refusing the remote credentials
 HEALTHCHECK --interval=60s --timeout=10s --start-period=180s --retries=3 \
     CMD curl -fsS -o /dev/null "http://127.0.0.1:${PSACC_PORT}${PSACC_BASE_PATH%/}/health" || exit 1
+# git state shown by a dev build; last, as a new value rebuilds every RUN after these lines
+ARG PSACC_GIT_VERSION=""
+ARG PSACC_GIT_REPO_URL=""
+ENV PSACC_GIT_VERSION="${PSACC_GIT_VERSION}" PSACC_GIT_REPO_URL="${PSACC_GIT_REPO_URL}"
 CMD /init.sh
