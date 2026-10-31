@@ -100,24 +100,27 @@ class FigureFilter:
                 *[dcc.Store(id=map_view_store(graph.graph_id)) for graph in self.maps]]
 
 
-def set_clientside_callback(dash_app, table_ids: list, figure_ids: list, map_ids: list):
+def set_clientside_callback(dash_app, table_ids: list, figure_ids: list, map_ids: list, tabs_id: str, map_tab: str):
     """Call it at import, once. The browser asks for the callbacks when it loads the app, a callback registered while
     a page is built reaches it only after a reload. So it knows just the ids, the rest comes with the page in a store.
     table_ids and figure_ids have the order of the filter that fills the store: tables, graphs, then maps.
-    map_ids are the maps among the figures: the view the user gave them stays when the figure changes."""
+    map_ids are the maps among the figures: the view the user gave them stays when the figure changes.
+    map_tab of tabs_id holds the maps: they are drawn only while it is open."""
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     sort_args = [f"sort{i}" for i in range(len(table_ids))]
     sort_dict = ", ".join(f'"{table_id}": {arg}' for table_id, arg in zip(table_ids, sort_args))
     view_args = [f"view{i}" for i in range(len(map_ids))]
     dash_app.clientside_callback(
-        f"""function(data, range, figures, {", ".join(sort_args + view_args)}, params) {{
+        f"""function(data, range, figures, activeTab, {", ".join(sort_args + view_args)}, params) {{
                 return filterAndSort(data, range, figures, params, params.log_level, {{{sort_dict}}}, params.config,
-                                     [{", ".join(view_args)}])
+                                     [{", ".join(view_args)}], activeTab === '{map_tab}')
             }}""",
         *[Output(table_id, "data") for table_id in table_ids],
         *[Output(figure_id, "figure") for figure_id in figure_ids],
         Input('clientside-data-store', 'data'),
         Input('date-slider', 'value'),
         Input('clientside-figure-store', 'data'),
+        Input(tabs_id, 'active_tab'),
         *[Input(table_id, 'sort_by') for table_id in table_ids],
         *[State(map_view_store(map_id), 'data') for map_id in map_ids],
         State(PARAMS_STORE, 'data'))

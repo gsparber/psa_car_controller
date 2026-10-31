@@ -1,6 +1,6 @@
 /* PSACC service worker: app shell offline, last known page content when the server can't be reached.
    Commands are never answered from the cache. */
-const CACHE = 'psacc-v1'
+const CACHE = 'psacc-v3'
 const BASE = new URL('./', self.location).pathname
 // Only these Dash callbacks may fall back to a cached answer: they render pages, they don't send anything to the car
 const CACHEABLE_OUTPUTS = ['page-content.children']

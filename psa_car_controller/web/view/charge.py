@@ -157,9 +157,8 @@ def get_charge_layout():
         ui.page_title("Charge"),
         car_select(CAR_SELECT),
         dcc.Interval(id=POLL, interval=30 * 1000),
-        html.Div(id=STATUS_DIV),
-        ui.section("Automatic stop", [html.Div(id=SETTINGS_DIV)]),
-        ui.section("Recent charges", [html.Div(id=RECENT_DIV)]),
+        ui.columns([html.Div(id=STATUS_DIV), ui.section("Automatic stop", [html.Div(id=SETTINGS_DIV)])],
+                   [ui.section("Recent charges", [html.Div(id=RECENT_DIV)])]),
     ], className="page")
 
 

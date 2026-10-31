@@ -86,7 +86,7 @@ def _content(period):
                                                         color="#fd7e14")))
         recent = sorted(trips, key=lambda t: t["start_at"], reverse=True)[:8]
         content.append(ui.section("Recent trips", [html.Div([
-            _trip_row(trip, unit) for trip in recent], className="list-group")]))
+            _trip_row(trip, unit) for trip in recent], className="list-group")], class_name="recent-trips"))
     if charges:
         x, y = insights_data.series(charges, "kw", period)
         content.append(ui.section("Charged energy", _chart("charged", x, y, "kWh",
@@ -99,7 +99,7 @@ def get_insights_layout():
     return html.Div([
         ui.page_title("Insights"),
         ui.period_chips(PERIOD, {key: value[0] for key, value in insights_data.PERIODS.items()}, "30d"),
-        dcc.Loading(html.Div(id=CONTENT), type="dot"),
+        dcc.Loading(html.Div(id=CONTENT, className="insights-content"), type="dot"),
         html.Div(ui.link_row("bi-table", "Detailed statistics", dash_app.get_relative_path("/v1/stats")),
                  className="list-group mt-4"),
     ], className="page")

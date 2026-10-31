@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from tests.test_browser_time import CLIENTSIDE, TestClientside as Clientside
-from tests.test_stats_page_load import StatsTest, ids_in
+from tests.test_stats_page_load import StatsTest, callbacks, ids_in
 
 HINT = "No trip with a position to show"
 
@@ -321,3 +321,87 @@ class TestUpdateMap(StatsTest):
         old = {"data": [{}, {}], "layout": {"map": {"zoom": 12, "center": {"lat": 42, "lon": 1}}}}
         figure = update_map(json.dumps(old), [])
         self.assertEqual([None], figure["data"][1]["lat"])
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class TestMapOnlyWithItsTabOpen(StatsTest):
+    """A drawn map loads tiles even in a hidden tab: each visit of /v1/stats told the tile server where the trips are."""
+    SKIP = "skip"
+
+    def setUp(self):
+        super().setUp()
+        self.views.figures.get_figures(self.car)
+        self.figure = self.views.figures.trips_map.to_json()
+
+    def filter_and_sort(self, trigger, visible, trips=()):
+        """What the callback gives its outputs: one table, one graph and the map. trigger: its Input, None on load."""
+        triggered = [{"prop_id": trigger}] if trigger else []
+        data = {"trips": list(trips), "chargings": []}
+        return Clientside.run_js(
+            "(() => { const log = console.log; console.log = () => {};"
+            f"dash_clientside = {{no_update: {json.dumps(self.SKIP)}, callback_context: {{triggered: {json.dumps(triggered)}}}}};"
+            "globalThis.document = {getElementById: () => ({})};"  # the summary cards
+            "const graph = {data: [{x: [], y: []}], layout: {}};"
+            f"const figures = {{graph: [graph], maps: [{self.figure}]}};"
+            "const table = {table_id: 't', src: 'trips'};"
+            f"const res = filterAndSort({json.dumps(data)}, [0, 2e9], figures,"
+            "{table_src: [table], date_columns: {trips: [], chargings: []},"
+            "graph_x_label: ['start_at'], graph_y_label: [[]],"
+            "map_x_label: ['lat'], map_y_label: [['long', 'start_at_str']]}, 20, {}, {minimumLength: 0}, [null],"
+            f"{json.dumps(visible)});"
+            "console.log = log; return res })()", "UTC")
+
+    def test_page_load_on_another_tab_draws_no_map(self):
+        table, graph, trips_map = self.filter_and_sort(None, False)
+        self.assertEqual(self.SKIP, trips_map)
+        self.assertEqual([], table)
+        self.assertNotEqual(self.SKIP, graph)
+
+    def test_slider_and_sort_on_another_tab_draw_no_map(self):
+        for trigger in ("date-slider.value", "t.sort_by"):
+            table, _, trips_map = self.filter_and_sort(trigger, False)
+            self.assertEqual(self.SKIP, trips_map, trigger)
+            self.assertEqual([], table, trigger)
+
+    def test_opening_the_tab_draws_the_trips_the_slider_selects(self):
+        trips = [dict(trip(1790841600, [47.1], [-1.1]), distance=10)]
+        table, graph, trips_map = self.filter_and_sort("tabs.active_tab", True, trips)
+        self.assertEqual([self.SKIP, self.SKIP], [table, graph])
+        self.assertEqual([47.1, None], trips_map["data"][0]["lat"])
+        self.assertEqual([47.1], trips_map["data"][1]["lat"])
+
+    def test_leaving_the_tab_changes_nothing(self):
+        self.assertEqual([self.SKIP] * 3, self.filter_and_sort("tabs.active_tab", False))
+
+    def test_tab_open_on_load_draws_the_map(self):
+        """The tabs keep the open one over a reload."""
+        self.assertNotEqual(self.SKIP, self.filter_and_sort(None, True)[2])
+
+    def test_slider_with_the_tab_open_draws_the_map(self):
+        trips = [dict(trip(1790841600, [47.1], [-1.1]), distance=10)]
+        self.assertEqual([47.1, None], self.filter_and_sort("date-slider.value", True, trips)[2]["data"][0]["lat"])
+
+    def test_callback_knows_the_open_tab(self):
+        views = self.views
+        self.assertIn(views.STATS_TABS, ids_in(self.build()))
+        spec = next(spec for spec in callbacks() if "trips-table.data" in spec["output"])
+        self.assertIn({"id": views.STATS_TABS, "property": "active_tab"}, spec["inputs"])
+
+    def test_map_starts_without_a_figure(self):
+        """The figure waits in the store, a figure in the layout would be drawn and load tiles."""
+        trips_map = find(self.build(), self.views.STATS_MAPS[0])
+        self.assertFalse(getattr(trips_map, "figure", None))
+
+    def test_map_is_in_the_tab_the_callback_watches(self):
+        tabs = find(self.build(), self.views.STATS_TABS)
+        tab = next(child for child in tabs.children if child.tab_id == self.views.STATS_MAP_TAB)
+        self.assertIn(self.views.STATS_MAPS[0], ids_in(tab))
+
+
+def find(component, component_id):
+    if isinstance(component, (list, tuple)):
+        return next((found for child in component if (found := find(child, component_id)) is not None), None)
+    if getattr(component, "id", None) == component_id:
+        return component
+    children = getattr(component, "children", None)
+    return None if children is None else find(children, component_id)

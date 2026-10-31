@@ -49,6 +49,9 @@ NO_POSITION_HINT = {"text": "No trip with a position to show", "visible": False,
                     "xref": "paper", "yref": "paper", "x": 0.5, "y": 0.5,
                     "font": {"size": 14, "color": "#212529"}, "bgcolor": "#fff", "bordercolor": "#dee2e6",
                     "borderpad": 8}
+# The same for both themes, the template of the theme can't replace what the layout sets (clientside.js, themedFigure).
+# Plotly writes white on the #636efa of the bars, 4.1:1. The grey toolbar is 1.7:1 on white.
+READABLE_CHART = {"hoverlabel": {"font": {"color": "#000"}}, "modebar": {"color": "#808080", "activecolor": "#0d6efd"}}
 
 
 def get_summary_cards():
@@ -76,7 +79,7 @@ def get_figures(car: Car):
         lat=[None], lon=[None],
         hovertext=[None],
         showlegend=False))
-    trips_map.update_layout(map={"style": "style.json", "zoom": 1},
+    trips_map.update_layout(READABLE_CHART, map={"style": "style.json", "zoom": 1},
                             margin={"t": 0, "b": 0, "l": 0, "r": 0},
                             annotations=[NO_POSITION_HINT])
     trips_map.add_trace(go.Scattermap(
@@ -110,7 +113,7 @@ def get_figures(car: Car):
             'width': '10%',
             'maxWidth': '10%',
             'minWidth': '10%',
-            'color': 'gray'
+            'color': 'var(--table-muted)'
         },
         columns=[{'id': 'id', 'name': '#', 'type': 'numeric'},
                  {'id': 'start_at_str', 'name': 'start at', 'type': 'datetime'},
@@ -137,7 +140,7 @@ def get_figures(car: Car):
             },
             {
                 'if': {'column_id': ['altitude_diff']},
-                'color': 'black'
+                'color': 'var(--table-strong)'
             },
             {
                 'if': {'filter_query': ESTIMATED_TRIP},
@@ -154,6 +157,7 @@ def get_figures(car: Car):
                                    histfunc="avg")
     consumption_fig.update_layout(yaxis_title=f"Consumption {consumption_label}", xaxis_title="date")
     consumption_fig.update_xaxes(type="date", tickformat="%x")  # the date format of the plotly locale
+    consumption_fig.update_layout(READABLE_CHART)
 
     consumption_fig_by_speed = px.histogram(data_frame=[{"start_at": 1, "speed_average": 2}], x="start_at",
                                             y="speed_average", histfunc="avg",
@@ -164,6 +168,7 @@ def get_figures(car: Car):
                                                   y=[0], name="Trips"))
     consumption_fig_by_speed.update_layout(xaxis_title=f"average Speed {speed_label}",
                                            yaxis_title=f"Consumption {consumption_label}")
+    consumption_fig_by_speed.update_layout(READABLE_CHART)
     # battery_table
     battery_table = DataTable(
         id='battery-table',
@@ -176,7 +181,7 @@ def get_figures(car: Car):
             'width': '10%',
             'maxWidth': '10%',
             'minWidth': '10%',
-            'color': 'gray'
+            'color': 'var(--table-muted)'
         },
         sort_by=[{'column_id': 'start_at_str', 'direction': 'desc'}],
         columns=[{'id': 'start_at_str', 'name': 'start at', 'type': 'datetime'},
@@ -200,31 +205,31 @@ def get_figures(car: Car):
         style_data_conditional=[
             {
                 'if': {'column_id': ['start_level', "end_level"]},
-                'color': 'black'
+                'color': 'var(--table-strong)'
             },
             {
                 'if': {
                     'filter_query': '{start_level} < 15',
                     'column_id': 'start_level'
                 },
-                'color': 'red'
+                'color': 'var(--table-low)'
             },
             {
                 'if': {
                     'filter_query': '{end_level} > 85',
                     'column_id': 'end_level'
                 },
-                'color': 'green'
+                'color': 'var(--table-high)'
             },
             {
                 'if': {
                     'filter_query': '{charging_mode} = "Quick"'
                 },
-                'backgroundColor': 'ivory'
+                'backgroundColor': 'var(--table-quick)'
             },
             {
                 'if': {'column_id': 'price'},
-                'color': 'dodgerblue',
+                'color': 'var(--table-price)',
                 'font-weihgt': 'bold'
             }
         ],
@@ -238,6 +243,7 @@ def get_figures(car: Car):
                    y=[0], name="Trips"))
     consumption_fig_by_temp.update_layout(xaxis_title="average temperature in °C",
                                           yaxis_title=f"Consumption {consumption_label}")
+    consumption_fig_by_temp.update_layout(READABLE_CHART)
     return True
 
 
@@ -248,7 +254,7 @@ def get_battery_curve_fig(row: dict, car: Car):
     battery_curves = Charging.get_battery_curve(conn, charge, car)
     battery_curves_dict = list(map(lambda bc: bc.__dict__, battery_curves))
     fig = px.line(battery_curves_dict, x="level", y="speed")
-    fig.update_layout(xaxis_title="Battery %", yaxis_title="Charging speed in kW")
+    fig.update_layout(READABLE_CHART, xaxis_title="Battery %", yaxis_title="Charging speed in kW")
     return html.Div(Graph(figure=fig))
 
 
@@ -260,5 +266,5 @@ def get_altitude_fig(trip: Trip):
     for line in res:
         line[0] = units.distance(line[0] - start_mileage, UNIT)
     fig = px.line(res, x=0, y=1)
-    fig.update_layout(xaxis_title=f"Distance {units.distance_label(UNIT)}", yaxis_title="Altitude m")
+    fig.update_layout(READABLE_CHART, xaxis_title=f"Distance {units.distance_label(UNIT)}", yaxis_title="Altitude m")
     return html.Div(Graph(figure=fig))

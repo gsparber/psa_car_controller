@@ -47,6 +47,11 @@ class TestDash(unittest.TestCase):
         self.assertRegex(source, r'window\.Plotly\|\|new Promise\(.{0,120}createElement\("script"\)')
         self.assertRegex(source, r'createElement\("script"\).{0,120}\.onload=')
 
+    def test_graph_draws_with_the_react_of_the_global(self):
+        """themeChartsOfPlotly of clientside.js replaces it. If the graph stops using it, charts stay light in the dark
+        theme: readable, but without any error."""
+        self.assertRegex(package_file(dash, "dcc", "async-graph.js"), r"[^.\w]Plotly\.react\(")
+
     def test_default_renderer_is_what_gets_replaced(self):
         """The attribute is the documented way of Dash to change this script."""
         self.assertRegex(dash.Dash(__name__).renderer, r"^var renderer = new DashRenderer\(.*\);$")

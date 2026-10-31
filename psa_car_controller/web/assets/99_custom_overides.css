@@ -9,7 +9,69 @@ div.export-load-anim .dash-loading-spinner {
 }
 
 .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner tr:hover > td:not(.focused) {
-  background-image: linear-gradient(#ffeb3b75 0 0);
+  background-image: linear-gradient(var(--table-hover) 0 0);
+}
+
+/* dash-table adds its styles after this file and with these selectors: the id comes first. Colors in 10_mobile.css */
+#react-entry-point .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner table {
+  --text-color: var(--table-text);
+  --border: var(--table-border);
+  --hover: var(--table-row-hover);
+  --background-color-ellipses: var(--table-bg);
+  --faded-text-header: var(--table-sort);
+  --selected-background: var(--table-selected);
+  color: var(--table-text);
+}
+
+#react-entry-point .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td {
+  background-color: var(--table-bg);
+}
+
+#react-entry-point .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+  background-color: var(--table-header-bg);
+}
+
+[data-bs-theme="dark"] #react-entry-point .dash-table-container .previous-next-container button {
+  color: var(--bs-body-color);
+  background-color: var(--table-header-bg);
+  border: 1px solid var(--table-border);
+}
+
+[data-bs-theme="dark"] #react-entry-point .dash-table-container .previous-next-container button:disabled {
+  color: var(--bs-tertiary-color);
+  background-color: transparent;
+}
+
+[data-bs-theme="dark"] #react-entry-point .dash-table-container .current-page-shadow,
+[data-bs-theme="dark"] #react-entry-point .dash-table-container input.current-page,
+[data-bs-theme="dark"] #react-entry-point .dash-table-container input.current-page::placeholder {
+  color: var(--bs-body-color);
+  background-color: var(--table-bg);
+}
+
+#react-entry-point .dash-table-container .dash-tooltip {
+  border-color: var(--table-tooltip-border);
+}
+
+#react-entry-point .dash-table-container .dash-tooltip .dash-table-tooltip {
+  color: var(--bs-body-color);
+  background-color: var(--table-tooltip-bg);
+}
+
+#react-entry-point .dash-table-container .dash-tooltip[data-attr-anchor='top']::after {
+  border-bottom-color: var(--table-tooltip-bg);
+}
+
+#react-entry-point .dash-table-container .dash-tooltip[data-attr-anchor='top']::before {
+  border-bottom-color: var(--table-tooltip-border);
+}
+
+#react-entry-point .dash-table-container .dash-tooltip[data-attr-anchor='bottom']::after {
+  border-top-color: var(--table-tooltip-bg);
+}
+
+#react-entry-point .dash-table-container .dash-tooltip[data-attr-anchor='bottom']::before {
+  border-top-color: var(--table-tooltip-border);
 }
 
 /* dash-table keeps its tooltip inside the window but for 2 px, whatever its width or margin: without this the page

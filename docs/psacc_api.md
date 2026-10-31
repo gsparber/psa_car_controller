@@ -92,8 +92,11 @@ These links will work only if PSACC is on your computer, if it isn't please repl
    All fields stay, with these differences:
    - `start_at`/`end_at` only frame the drive, and `positions` only holds its end.
    - `duration` and `speed_average` are `null`, the drive took an unknown part of that time.
-   - `consumption`, `consumption_km` and `consumption_fuel_km` are `null` when no level fell or a charge was recorded
-     on the way. Otherwise they come from the levels at both ends, a charge nothing recorded would make them too low.
+   - `consumption`, `consumption_km` and `consumption_fuel_km` are `null` when no level fell, the car was charged or
+     refuelled on the way (a recorded charge touching the frame counts), or an electric car's level fell by too little
+     for the distance (under 7 % of the model's `max_elec_consumption`, 4.9 kWh/100 km for most, unless the drive went
+     downhill by over 1 %). Otherwise they come from the levels at both ends, a charge nothing recorded and too small
+     to notice would make them too low.
    - `distance` and `mileage` are as for any other trip.
 
 18. Status of the remote commands

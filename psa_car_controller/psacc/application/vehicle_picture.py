@@ -28,9 +28,13 @@ class VehiclePicture:
         files = glob.glob(os.path.join(self.directory, f"{PREFIX}{glob.escape(vin)}.*"))
         return files[0] if files else None
 
+    def _failed_recently(self, vin) -> bool:
+        return time.time() - self._failed_at.get(vin, 0) < RETRY_AFTER_S
+
     def fetch_in_background(self, vin):
-        """Start a download unless one ran recently; the picture shows on a later page refresh."""
-        if self.get_cached(vin) or time.time() - self._failed_at.get(vin, 0) < RETRY_AFTER_S:
+        """Start a download unless one ran recently; the picture shows on a later page refresh.
+        The way for whoever serves a request: it asks PSA and a foreign server, and a request must not wait for them."""
+        if self.get_cached(vin) or self._failed_recently(vin):
             return
         if self._lock.locked():
             return
@@ -40,6 +44,9 @@ class VehiclePicture:
         with self._lock:
             if self.get_cached(vin):
                 return self.get_cached(vin)
+            # also here: a second thread can have waited for the lock while the first one failed
+            if self._failed_recently(vin):
+                return None
             try:
                 for url in self._picture_urls(vin):
                     path = self._download(vin, url)

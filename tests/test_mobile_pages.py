@@ -1,12 +1,16 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from psa_car_controller.psacc.application.vehicle_picture import VehiclePicture
+from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psa import RemoteClient, precond_programs
 from psa_car_controller.web.view import insights_data
+from tests.test_stats_page_load import run_with_limit
 from tests.utils import get_web_view
 
 NOW = datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc)
@@ -106,6 +110,80 @@ class TestVehiclePicture(unittest.TestCase):
         pictures = VehiclePicture(self.psacc, self.dir)
         self.assertIsNone(pictures.fetch("VIN1"))
         self.assertIsNone(pictures.get_cached("VIN1"))
+
+    def test_no_second_attempt_after_a_failure(self):
+        """A thread that waited for the lock while the first one failed asked PSA again."""
+        self.psacc.api.side_effect = OSError("PSA is down")
+        pictures = VehiclePicture(self.psacc, self.dir)
+        self.assertIsNone(pictures.fetch("VIN1"))
+        self.assertIsNone(pictures.fetch("VIN1"))
+        self.psacc.api.assert_called_once()
+
+
+class TestPictureDoesNotHoldThePage(unittest.TestCase):
+    """Home and /vehicle_picture without a picture yet: PSA may be slow or down, the answer comes anyway."""
+    VIN = "VIN1"
+    LIMIT_S = 2
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.release = threading.Event()
+        self.addCleanup(self.release.set)
+        self.psacc = MagicMock()
+        self.psacc.vehicles_list.get_car_by_vin.return_value = MagicMock()
+        self.pictures = VehiclePicture(self.psacc, self.dir)
+        self.api = get_web_view("api")
+        self.home = get_web_view("home")
+        for patcher in (patch.object(self.api, "APP", MagicMock(myp=self.psacc)),
+                        patch.object(self.api, "get_vehicle_picture", return_value=self.pictures),
+                        patch.object(self.home, "get_vehicle_picture", return_value=self.pictures),
+                        patch.object(self.home, "app", return_value=MagicMock(myp=self.psacc))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def get_picture(self):
+        return self.api.app.test_client().get(f"/vehicle_picture/{self.VIN}").status_code
+
+    def wait_for_download(self):
+        for _ in range(100):
+            if self.psacc.api.called and not self.pictures._lock.locked():  # pylint: disable=protected-access
+                return
+            time.sleep(0.02)
+
+    def slow_psa(self):
+        self.psacc.api.side_effect = lambda: self.release.wait(10) and MagicMock()
+
+    def test_route_does_not_wait_for_psa(self):
+        self.slow_psa()
+        status = run_with_limit(self.get_picture, self.LIMIT_S)
+        self.assertEqual([404], status)
+
+    def test_home_does_not_wait_for_psa(self):
+        self.slow_psa()
+        car = Car(self.VIN, "id", "Peugeot")
+        self.assertEqual([None], run_with_limit(lambda: self.home._picture(car), self.LIMIT_S))  # pylint: disable=protected-access
+
+    def test_route_asks_psa_once_when_it_is_down(self):
+        """It asked on every request, past the wait after a failure Home keeps to."""
+        self.psacc.api.side_effect = OSError("PSA is down")
+        for _ in range(3):
+            self.assertEqual(404, self.get_picture())
+            self.wait_for_download()
+        self.psacc.api.assert_called_once()
+
+    def test_home_stays_when_psa_is_down(self):
+        self.psacc.api.side_effect = OSError("PSA is down")
+        car = Car(self.VIN, "id", "Peugeot")
+        for _ in range(3):
+            self.assertIsNone(self.home._picture(car))  # pylint: disable=protected-access
+            self.wait_for_download()
+        self.psacc.api.assert_called_once()
+
+    def test_picture_is_served_once_it_is_there(self):
+        with open(os.path.join(self.dir, f"vehicle_picture_{self.VIN}.png"), "wb") as picture:
+            picture.write(b"png")
+        self.assertEqual(200, self.get_picture())
+        self.psacc.api.assert_not_called()
 
 
 if __name__ == "__main__":

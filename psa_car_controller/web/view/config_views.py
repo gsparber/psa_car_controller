@@ -212,7 +212,7 @@ def log_layout():
                "flex-direction": "column-reverse",
                "white-space": "pre-line"},
         children=log_text,
-        className="m-3 bg-light h5"),
+        className="m-3 bg-body-tertiary h5"),
         html.Div(id="empty-div")])
 
 

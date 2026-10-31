@@ -71,6 +71,14 @@ class TestCallbacksExistBeforeThePage(StatsTest):
             self.assertIn(output, outputs)
         self.assertTrue(any("tab_trips_popup_graph.children" in output for output in outputs))
 
+    def test_export_animation_waits_for_a_click(self):
+        """Each slept 3 s on every visit of the page. Leaving it meanwhile was a failed callback in WebKit."""
+        for output, button in (("loading-output-trips.children", "export-trips-table"),
+                               ("loading-output-battery.children", "export-battery-table")):
+            spec = next(spec for spec in callbacks() if spec["output"] == output)
+            self.assertTrue(spec["prevent_initial_call"], output)
+            self.assertEqual([{"id": button, "property": "n_clicks"}], spec["inputs"])
+
     def test_building_the_page_adds_no_callback(self):
         before = len(callbacks())
         self.build()

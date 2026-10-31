@@ -44,11 +44,12 @@ from psa_car_controller.web.view import api  # pylint: disable=unused-import
 logger = CustomLogger.getLogger(__name__)
 
 EMPTY_DIV = "empty-div"
-THEME_STORE = "app-theme"
 # what the callback of /v1/stats fills, in the order FigureFilter gives them to it
 STATS_TABLES = ["trips-table", "battery-table"]
 STATS_GRAPHS = ["consumption_fig", "consumption_fig_by_speed", "consumption_graph_by_temp"]
 STATS_MAPS = ["trips_map"]
+STATS_TABS = "tabs"
+STATS_MAP_TAB = "map"
 
 trips: Trips = Trips()
 chargings: List[dict]
@@ -139,7 +140,7 @@ def display_page(pathname, search):
 
 
 def create_callback():  # noqa: MC0001
-    set_clientside_callback(dash_app, STATS_TABLES, STATS_GRAPHS + STATS_MAPS, STATS_MAPS)
+    set_clientside_callback(dash_app, STATS_TABLES, STATS_GRAPHS + STATS_MAPS, STATS_MAPS, STATS_TABS, STATS_MAP_TAB)
 
     @dash_app.callback(Output(EMPTY_DIV, "children"),
                        [Input("battery-table", "data_timestamp")],
@@ -188,11 +189,15 @@ def create_callback():  # noqa: MC0001
             return figures.get_altitude_fig(trips[active_cell["row_id"] - 1]), True
         return "", False
 
-    @dash_app.callback(Output("loading-output-trips", "children"), Input("export-trips-table", "n_clicks"))
+    # Only after a click: on every visit of the page they kept two server threads for nothing, and leaving it within
+    # these 3 s was a "Callback failed: the server did not respond" in WebKit.
+    @dash_app.callback(Output("loading-output-trips", "children"), Input("export-trips-table", "n_clicks"),
+                       prevent_initial_call=True)
     def export_trips_loading_animation(n_clicks):  # pylint: disable=unused-argument
         time.sleep(3)
 
-    @dash_app.callback(Output("loading-output-battery", "children"), Input("export-battery-table", "n_clicks"))
+    @dash_app.callback(Output("loading-output-battery", "children"), Input("export-battery-table", "n_clicks"),
+                       prevent_initial_call=True)
     def export_batt_loading_animation(n_clicks):  # pylint: disable=unused-argument
         time.sleep(3)
     # Emulate click on original Export datatables button, since original button is hard to modify
@@ -459,13 +464,13 @@ def _cached_or_new_layout():
                                 size="xl",
                             )
                             ]),
-                    dbc.Tab(label="Map", tab_id="map", children=[
+                    dbc.Tab(label="Map", tab_id=STATS_MAP_TAB, children=[
                         # fetchTile of clientside.js fills it
                         html.Div(id="map-tiles-hint", className="alert alert-warning mb-1", role="status",
                                  hidden=True),
                         maps])
                 ],
-                    id="tabs",
+                    id=STATS_TABS,
                     active_tab="summary",
                     persistence=True),
                 html.Div(id=EMPTY_DIV)
@@ -489,14 +494,5 @@ dash_app.layout = dbc.Container(fluid=True, children=[dcc.Location(id='url', ref
                                                       html.Div(id='page-content'),
                                                       pending_store(),
                                                       command_status(),
-                                                      dcc.Store(id=THEME_STORE),
                                                       ui.toast()],
                                 className="app-root")
-
-# light/dark follows the page: the classic /v1/ pages stay light (see THEME_SCRIPT in app.py)
-dash_app.clientside_callback(
-    """function (pathname) {
-        if (window.psaccApplyTheme) { window.psaccApplyTheme() }
-        return window.dash_clientside.no_update
-    }""",
-    Output(THEME_STORE, "data"), Input("url", "pathname"))

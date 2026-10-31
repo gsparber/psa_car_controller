@@ -48,15 +48,12 @@ META_TAGS = [
 ]
 
 # Follow the system light/dark setting, also when it changes while the app is open. Inline in <head> so the page
-# never flashes in the wrong theme before the assets load. The classic pages under /v1/ were made for light only.
-# views calls window.psaccApplyTheme again on every page change, since Dash changes pages without a reload.
+# never flashes in the wrong theme before the assets load. Charts follow in clientside.js, they have no CSS for it.
 THEME_SCRIPT = """<script>(function () {
         var dark = window.matchMedia('(prefers-color-scheme: dark)')
         function apply () {
-          var classic = window.location.pathname.indexOf('/v1/') !== -1
-          document.documentElement.setAttribute('data-bs-theme', dark.matches && !classic ? 'dark' : 'light')
+          document.documentElement.setAttribute('data-bs-theme', dark.matches ? 'dark' : 'light')
         }
-        window.psaccApplyTheme = apply
         apply()
         dark.addEventListener('change', apply)
       }())</script>"""

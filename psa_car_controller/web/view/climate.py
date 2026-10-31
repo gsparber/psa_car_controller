@@ -112,8 +112,9 @@ def get_climate_layout():
         ui.page_title("Climate"),
         car_select(CAR_SELECT),
         dcc.Interval(id=POLL, interval=30 * 1000),
-        html.Div(id=STATUS_DIV),
-        ui.section("Schedules", [html.Div(id=PROGRAMS_DIV)]),
+        ui.columns([html.Div(id=STATUS_DIV)],
+                   [ui.section("Schedules", [html.Div(id=PROGRAMS_DIV, className="program-grid")])],
+                   class_name="page-columns-wide-right"),
     ], className="page")
 
 

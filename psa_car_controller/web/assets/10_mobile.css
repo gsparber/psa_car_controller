@@ -9,6 +9,31 @@
   --app-fill: rgba(118, 118, 128, 0.12);
   --app-separator: rgba(60, 60, 67, 0.15);
   --app-bar-bg: rgba(249, 249, 249, 0.85);
+  /* 3:1 on the card and on the page, what Bootstrap has is 1.3:1 */
+  --app-control-border: #86868b;
+  /* Bootstrap: 4:1 on the page */
+  --bs-link-color: #0a58ca;
+  --bs-link-color-rgb: 10, 88, 202;
+  --bs-link-hover-color: #084298;
+  --bs-link-hover-color-rgb: 8, 66, 152;
+  --bs-form-invalid-color: #b02a37;
+  /* Tables of /v1/stats (figures.py). They also have to hold on a hovered and a selected row */
+  --table-bg: #fff;
+  --table-header-bg: #fafafa;
+  --table-text: #3c3c3c;
+  --table-muted: #5c5c5c;
+  --table-strong: #000;
+  --table-low: #c00000;
+  --table-high: #006b00;
+  --table-price: #0a58ca;
+  --table-quick: ivory;
+  --table-hover: #ffeb3b75;
+  --table-row-hover: #fdfdfd;
+  --table-selected: rgba(255, 65, 54, 0.2);
+  --table-border: lightgrey;
+  --table-sort: #6e6e73;
+  --table-tooltip-bg: #f6f6f6;
+  --table-tooltip-border: #e4e4e4;
 }
 
 [data-bs-theme="dark"] {
@@ -17,6 +42,28 @@
   --app-fill: rgba(118, 118, 128, 0.24);
   --app-separator: rgba(84, 84, 88, 0.6);
   --app-bar-bg: rgba(22, 22, 23, 0.85);
+  --app-control-border: #8e8e93;
+  --bs-link-color: #6ea8fe;
+  --bs-link-color-rgb: 110, 168, 254;
+  --bs-link-hover-color: #8bb9fe;
+  --bs-link-hover-color-rgb: 139, 185, 254;
+  --bs-form-invalid-color: #ea868f;
+  --table-bg: #1c1c1e;
+  --table-header-bg: #2c2c2e;
+  --table-text: #e5e5ea;
+  --table-muted: #c7c7cc;
+  --table-strong: #fff;
+  --table-low: #ffb3ae;
+  --table-high: #7fdc8c;
+  --table-price: #8ec2ff;
+  --table-quick: #37351f;
+  --table-hover: #ffeb3b1f;
+  --table-row-hover: #1c1c1e;
+  --table-selected: #4a2a2a;
+  --table-border: #48484a;
+  --table-sort: #aeaeb2;
+  --table-tooltip-bg: #2c2c2e;
+  --table-tooltip-border: #636366;
 }
 
 /* Dash 4 components (slider, dropdown) take their colors from these */
@@ -27,9 +74,15 @@
   --Dash-Text-Primary: var(--bs-body-color);
   --Dash-Text-Strong: var(--bs-emphasis-color);
   --Dash-Text-Weak: var(--bs-secondary-color);
-  --Dash-Text-Disabled: var(--bs-tertiary-color);
+  /* also the marks outside of the selection of a slider: they stay readable */
+  --Dash-Text-Disabled: var(--bs-secondary-color);
   --Dash-Stroke-Weak: var(--app-separator);
   --Dash-Fill-Disabled: var(--app-fill);
+}
+
+/* The filled part of a slider: 2.9:1 on its track with --bs-primary */
+[data-bs-theme="dark"] {
+  --Dash-Fill-Interactive-Strong: #3d8bfd;
 }
 
 body {
@@ -93,7 +146,7 @@ body {
 
 .top-nav-link.active,
 .top-nav-link:hover {
-  color: var(--bs-primary);
+  color: var(--bs-primary-text-emphasis);
   background: var(--bs-primary-bg-subtle);
 }
 
@@ -135,7 +188,7 @@ body {
 }
 
 .bottom-nav-link.active {
-  color: var(--bs-primary);
+  color: var(--bs-link-color);
 }
 
 /* Phones: the tab bar is the navigation, the top bar would only repeat the app name */
@@ -542,6 +595,19 @@ body {
   opacity: 0.5;
 }
 
+/* They still tell the state of the car and the settings, which have to stay readable */
+.app-offline .home-tile {
+  opacity: 0.7;
+}
+
+.app-offline .home-tile .tile-sub {
+  opacity: 1;
+}
+
+.app-offline #charge-settings {
+  opacity: 0.85;
+}
+
 /* Lists inside pages: card background, hairline separators, no outer border */
 .page .list-group {
   --bs-list-group-bg: var(--app-card);
@@ -610,8 +676,9 @@ body {
   }
 }
 
-/* Mini charts: Plotly writes its text colors inline, follow the theme instead */
-.mini-chart .main-svg text {
+/* Mini charts: Plotly writes its text colors inline, follow the theme instead. Not the hover labels: they are on the
+   color of the bar, Plotly picks the text for it */
+.mini-chart .main-svg text:not(.hoverlayer text) {
   fill: var(--bs-secondary-color) !important;
 }
 
@@ -624,6 +691,65 @@ body {
 
 [data-bs-theme="dark"] .soc-ring {
   background: conic-gradient(var(--bs-success) calc(var(--soc) * 1%), #2c2c2e 0);
+}
+
+/* Bootstrap components on the surfaces of the app, the same as Bootstrap in light */
+.card {
+  --bs-card-bg: var(--app-card);
+}
+
+.modal {
+  --bs-modal-bg: var(--app-card);
+}
+
+.nav-tabs {
+  --bs-nav-tabs-link-active-bg: var(--app-card);
+  --bs-nav-tabs-link-active-border-color: var(--bs-border-color) var(--bs-border-color) var(--app-card);
+}
+
+/* The colors Bootstrap keeps in both themes, too weak on a page or a card */
+.form-control,
+.form-select,
+.form-check-input {
+  border-color: var(--app-control-border);
+}
+
+.form-text.text-secondary {
+  color: var(--bs-secondary-color) !important;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: var(--bs-link-color);
+}
+
+.btn-outline-secondary {
+  --bs-btn-color: var(--bs-secondary-color);
+}
+
+.alert a {
+  color: var(--bs-alert-link-color);
+}
+
+/* Export button of /v1/stats, buttons of /control */
+[data-bs-theme="dark"] .btn-light {
+  --bs-btn-color: var(--bs-body-color);
+  --bs-btn-bg: #2c2c2e;
+  --bs-btn-border-color: #48484a;
+  --bs-btn-hover-color: var(--bs-body-color);
+  --bs-btn-hover-bg: #3a3a3c;
+  --bs-btn-hover-border-color: #636366;
+  --bs-btn-active-color: var(--bs-body-color);
+  --bs-btn-active-bg: #48484a;
+  --bs-btn-active-border-color: #636366;
+  --bs-btn-disabled-color: var(--bs-secondary-color);
+  --bs-btn-disabled-bg: #2c2c2e;
+  --bs-btn-disabled-border-color: #48484a;
+}
+
+/* Black drawings of /v1/stats and /control */
+[data-bs-theme="dark"] .card-img,
+[data-bs-theme="dark"] .btn-light img {
+  filter: invert(1) hue-rotate(180deg);
 }
 
 /* Settings: connection state badges */
@@ -762,5 +888,189 @@ body {
 @media (min-width: 576px) and (max-width: 991.98px) {
   #date-slider .dash-slider-mark:nth-of-type(even) {
     display: none;
+  }
+}
+
+/* Big screens: the pages stop being one phone-wide column. Everything for them stays in this block, so narrower
+   screens keep their layout. The wrappers (.page-columns, .page-col) are plain blocks below 992 px. */
+@media (min-width: 992px) {
+  .app-root {
+    padding-left: max(1.5rem, env(safe-area-inset-left));
+    padding-right: max(1.5rem, env(safe-area-inset-right));
+  }
+
+  /* Wide enough for columns, not so wide that a 2560 px screen tears them apart. The bar stays in line with the page:
+     a percentage in padding counts from the width of #page-content, the one .page is centered in. */
+  .app-bar {
+    --bar-inset: calc(1.5rem + max(0px, (100% - 90rem) / 2));
+    margin: 0 calc(-1 * max(1.5rem, env(safe-area-inset-right))) 1rem;
+    padding-left: max(var(--bar-inset), env(safe-area-inset-left));
+    padding-right: max(var(--bar-inset), env(safe-area-inset-right));
+  }
+
+  .app-main {
+    padding-bottom: 2.5rem;
+  }
+
+  .page {
+    max-width: 90rem;
+  }
+
+  .page-columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
+    align-items: start;
+  }
+
+  .page-columns-wide-right {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  /* Tops of the columns in line: the first section of a column has nothing above it */
+  .page-col > .page-section:first-child,
+  .page-col > :first-child > .page-section:first-child {
+    margin-top: 0;
+  }
+
+  /* Controls and notes keep the size they have on a phone, a full width pill or a 200 character line reads badly */
+  .page .segmented {
+    max-width: 28rem;
+  }
+
+  .page > select {
+    max-width: 28rem;
+  }
+
+  .page-col .segmented {
+    max-width: none;
+  }
+
+  .page small.d-block,
+  .page p,
+  .remote-hint {
+    max-width: 65ch;
+  }
+
+  /* Home: the car on the left, what can be done with it on the right */
+  .home-status {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    grid-template-rows: auto 1fr;
+    gap: 1rem 1.5rem;
+    align-items: start;
+  }
+
+  .home-status > .alert {
+    grid-column: 1 / -1;
+  }
+
+  .home-hero {
+    grid-row: 1 / span 2;
+    margin-bottom: 0;
+  }
+
+  .soc-ring {
+    width: 16rem;
+  }
+
+  .hero-visual.with-picture .soc-ring {
+    width: 12rem;
+  }
+
+  .car-picture {
+    max-height: 16rem;
+  }
+
+  /* Climate: schedules side by side, as many as fit */
+  .program-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .program-grid > * {
+    grid-column: 1 / -1;
+  }
+
+  .program-grid > .program-card,
+  .program-grid > #climate-add-wrap {
+    grid-column: auto;
+  }
+
+  .program-grid > .program-card {
+    margin-bottom: 0;
+  }
+
+  .program-grid .add-button {
+    --bs-btn-color: var(--bs-secondary-color);
+    height: 100%;
+    margin-bottom: 0 !important;
+  }
+
+  .program-grid > .big-button {
+    justify-self: start;
+    width: auto !important;
+    min-width: 14rem;
+  }
+
+  /* A cell is wider than the 44 px a day button may get in height: keep them round */
+  .day-chips .btn {
+    width: min(100%, 2.75rem);
+    margin: 0 auto;
+  }
+
+  .day-chips {
+    max-width: 26rem;
+  }
+
+  /* Insights: all the tiles in one row, charts as wide as they can be, the list of trips next to them */
+  .stat-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  /* 3:2 keeps a trip on two lines at 1024 px, 2:1 from 1200 px on */
+  .insights-content:has(> .recent-trips) {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    column-gap: 1.5rem;
+    align-items: start;
+  }
+
+  .insights-content > .stat-grid {
+    grid-column: 1 / -1;
+  }
+
+  .insights-content > .page-section {
+    grid-column: 1;
+  }
+
+  .insights-content > .recent-trips {
+    grid-column: 2;
+    grid-row: 2 / span 3;
+  }
+
+  /* Log: time and level in a column of their own, the message gets the rest */
+  .log-entry {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    column-gap: 1rem;
+  }
+
+  .log-entry > .d-flex {
+    margin-bottom: 0 !important;
+  }
+
+  /* With a mouse a tile answers before the click, as links and list rows do */
+  @media (hover: hover) {
+    .home-tile.btn:not(.active) {
+      --bs-btn-hover-bg: color-mix(in srgb, var(--app-card) 94%, var(--bs-body-color));
+    }
+  }
+}
+
+@media (min-width: 1200px) {
+  .insights-content:has(> .recent-trips) {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   }
 }

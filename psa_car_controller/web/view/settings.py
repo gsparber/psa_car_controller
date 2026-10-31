@@ -309,11 +309,7 @@ def get_settings_layout():
         ui.page_title("Settings"),
         dcc.Store(id=STATE_STORE, data=state),
         dcc.Interval(id=POLL, interval=10 * 1000),
-        html.Div(render(state), id=CONTENT),
-        _units(),
-        _language(),
-        _home_assistant(),
-        _more(),
+        ui.columns([html.Div(render(state), id=CONTENT), _units(), _language()], [_home_assistant(), _more()]),
     ], className="page")
 
 

@@ -394,8 +394,9 @@ def vehicle_picture(vin):
     if APP.myp.vehicles_list.get_car_by_vin(vin) is None:
         abort(404)
     pictures = get_vehicle_picture(APP.myp)
-    path = pictures.get_cached(vin) or pictures.fetch(vin)
+    path = pictures.get_cached(vin)
     if path is None:
+        pictures.fetch_in_background(vin)
         abort(404)
     return send_file(os.path.abspath(path), max_age=7 * 24 * 3600)
 

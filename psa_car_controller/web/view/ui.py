@@ -41,10 +41,17 @@ def page_title(title, subtitle=None):
                     className="page-title")
 
 
-def section(title, children, extra=None):
+def section(title, children, extra=None, class_name=None):
     return html.Section([html.Div([html.H2(title, className="section-title"), extra],
                                   className="d-flex align-items-center justify-content-between"),
-                         *children], className="page-section")
+                         *children], className=f"page-section {class_name}" if class_name else "page-section")
+
+
+def columns(left, right, class_name=None):
+    """Two columns on a big screen, one after the other below (10_mobile.css): the reading and tab order stay the same
+    on all widths, left comes first."""
+    return html.Div([html.Div(left, className="page-col"), html.Div(right, className="page-col")],
+                    className=f"page-columns {class_name}" if class_name else "page-columns")
 
 
 def stat_tile(label, value, unit="", icon=None):

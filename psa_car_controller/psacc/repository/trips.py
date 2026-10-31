@@ -18,6 +18,13 @@ MAX_SPEED = 150
 GAP_HOURS = 2
 # A slow gap needs more than this to be a drive: up to here it can be the car moved on a parking lot, or rounding.
 MIN_SLOW_GAP_KM = 1
+# Below this share of the model's max_elec_consumption, a level that fell can't be all a gap's drive used. At the usual
+# 70 that's 4.9 kWh/100 km: rolling a 1.6 t car takes 3.5 at the wheels and 4.1 from the battery, before air or heating,
+# and regeneration only gives back part of what the drive put in. The frugal city drive is at 10. It scales with the
+# model because a quadricycle stays well below that.
+MIN_ELEC_SHARE = 0.07
+# A mean slope of 1 % gives 1.6 t 4.4 kWh/100 km: a descent like that can explain a low level drop by itself.
+DESCENT_M_PER_KM = 10
 
 
 def as_utc(date):
@@ -84,13 +91,26 @@ class Trips(list):
         self.close_trip(trip, start, end, trip_parser)
 
     def is_charged_between(self, start, end):
-        """A recorded charge between two positions. One without an end only counts there if it started there: it can
-        be an old one nothing ended, and whatever came after it isn't part of it."""
+        """A recorded charge between two positions. Touching counts: a charge closed after a drive ends at its last
+        curve point, and it can have gone on from there. One without an end only counts there if it started there: it
+        can be an old one nothing ended, and whatever came after it isn't part of it."""
         start_at, end_at = as_utc(start["Timestamp"]), as_utc(end["Timestamp"])
         for charge_start, charge_stop in self.recorded_charges:
-            if charge_start < end_at and (charge_stop or charge_start) > start_at:
+            if charge_start <= end_at and (charge_stop or charge_start) >= start_at:
                 return True
         return False
+
+    @staticmethod
+    def is_too_low_for_the_car(trip: Trip, diff_level):
+        """Even the most the levels allow is below what the car can use: it charged on the way, unseen. Levels are whole
+        percents, so the real drop is under one more: a short drive of 1 % is never too low because of the rounding."""
+        car = trip.car
+        if not car.is_electric():  # a hybrid can do most of it on fuel
+            return False
+        if trip.altitude_diff is not None and -trip.altitude_diff >= trip.distance * DESCENT_M_PER_KM:
+            return False
+        most_kwh = (diff_level + 1) * car.battery_power / 100
+        return 100 * most_kwh / trip.distance < car.max_elec_consumption * MIN_ELEC_SHARE
 
     def close_trip(self, trip: Trip, start, end, trip_parser: TripParser):
         logger.debugv("stop trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
@@ -114,10 +134,11 @@ class Trips(list):
                 # One that fell says too little if the car charged on the way, the charge then shouldn't look like
                 # a low consumption.
                 trip.consumption_known = (diff_level > 0 or diff_level_fuel > 0) \
-                    and not self.is_charged_between(start, end)
+                    and not trip_parser.is_refuel(start, end, trip.distance) \
+                    and not self.is_charged_between(start, end) \
+                    and not Trips.is_too_low_for_the_car(trip, diff_level)
                 if not trip.consumption_known:
                     diff_level = diff_level_fuel = 0
-                diff_level_fuel = max(diff_level_fuel, 0)
             if diff_level != 0:
                 trip.set_consumption(diff_level)  # kw
             if diff_level_fuel != 0:

@@ -135,11 +135,95 @@ function localizePage (root) {
   localizeLabels(root)
 }
 
+// dcc.Link has no aria props: the tab of the page tells screen readers too, not only by its color
+function markCurrentTab (root) {
+  root.querySelectorAll('.top-nav-link, .bottom-nav-link').forEach(function (link) {
+    if (link.classList.contains('active')) {
+      link.setAttribute('aria-current', 'page')
+    } else {
+      link.removeAttribute('aria-current')
+    }
+  })
+}
+
 if (typeof document !== 'undefined') {
   // runs before the browser paints, for what the server sends and everything Dash adds or updates later
-  new MutationObserver(() => localizePage(document)).observe(document.documentElement, {
+  new MutationObserver(() => {
+    localizePage(document)
+    markCurrentTab(document)
+  }).observe(document.documentElement, {
     childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['datetime', 'value', 'data-label']
   })
+}
+
+// Plotly knows no CSS variables. The colors of the dark theme of 10_mobile.css: --app-card, --bs-body-color, --app-separator
+const DARK_CHART = { background: '#1c1c1e', text: '#dee2e6', line: '#48484a' }
+// The template of a chart until the theme asked for another one, which a change back to light needs
+const chartTemplates = new WeakMap()
+
+function darkTheme () {
+  return document.documentElement.getAttribute('data-bs-theme') === 'dark'
+}
+
+// What the figure has in its template stays: colors of the traces, margins of the axes. A layout can't be changed for
+// the dark theme, the server doesn't know the theme, so what the figure sets itself wins (bar_chart: no background).
+function darkChartTemplate (template) {
+  const { data = {}, layout = {} } = template || {}
+  const { background, text, line } = DARK_CHART
+  const axis = old => ({ ...old, gridcolor: line, linecolor: line, zerolinecolor: line })
+  return {
+    ...template,
+    data: { ...data, bar: (data.bar || [{}]).map(bar => ({ ...bar, marker: { ...bar.marker, line: { color: background, width: 0.5 } } })) },
+    layout: {
+      ...layout,
+      paper_bgcolor: background,
+      plot_bgcolor: background,
+      font: { ...layout.font, color: text },
+      xaxis: axis(layout.xaxis),
+      yaxis: axis(layout.yaxis)
+    }
+  }
+}
+
+function themedFigure (figure) {
+  if (!darkTheme() || !figure || !figure.layout) {
+    return figure
+  }
+  return { ...figure, layout: { ...figure.layout, template: darkChartTemplate(figure.layout.template) } }
+}
+
+// dcc.Graph gives every figure to Plotly.react: the charts of the server, the popups, the ones of the callbacks. Without
+// this they all would need the theme as an input, and would show the wrong one until their callback has run.
+function themeChartsOfPlotly () {
+  if (!window.Plotly || !window.Plotly.react || window.Plotly.react.themed) {
+    return
+  }
+  const react = window.Plotly.react
+  window.Plotly.react = function (element, figure, ...others) {
+    if (figure && figure.layout) {
+      chartTemplates.set(element, figure.layout.template)
+    }
+    return react.call(this, element, themedFigure(figure), ...others)
+  }
+  window.Plotly.react.themed = true
+}
+
+// The system changed its theme. Only the template: the charts keep their zoom, the map doesn't load new tiles.
+function themeCharts () {
+  document.querySelectorAll('.js-plotly-plot').forEach(function (element) {
+    if (chartTemplates.has(element)) {
+      const template = chartTemplates.get(element)
+      window.Plotly.relayout(element, { template: darkTheme() ? darkChartTemplate(template) : template })
+    }
+  })
+}
+
+if (typeof document !== 'undefined') {
+  // dcc.Graph adds the script of plotly when it first needs it, see plotlyLoaded of 00_language.js
+  document.addEventListener('load', themeChartsOfPlotly, true)
+  themeChartsOfPlotly()
+  // after the listener of THEME_SCRIPT (app.py), the one in <head>
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeCharts)
 }
 
 // A new choice in the settings: charts take it when they are drawn again, on the next page
@@ -608,16 +692,32 @@ function getLastPosition (trips) {
   return null
 }
 
-function filterAndSort (data, range, figures, p, log, sort, config, userViews = []) { // eslint-disable-line no-unused-vars
+function noUpdates (count) {
+  return Array(count).fill(dash_clientside.no_update) // eslint-disable-line  no-undef
+}
+
+// mapVisible: a drawn map loads its tiles even in a hidden tab, and they tell the tile server where the trips are.
+// So it gets its figure when its tab is open, with what the slider says by then.
+function filterAndSort (data, range, figures, p, log, sort, config, userViews = [], mapVisible = true) { // eslint-disable-line no-unused-vars
   if (log > 10) {
     logger.disableLogger()
   }
   const ctx = dash_clientside.callback_context.triggered // eslint-disable-line  no-undef
   const outFigures = []; let dataFiltered
+  const others = p.table_src.length + figures.graph.length
   console.log('figures:', figures)
   console.log('data:', data)
   console.log('ctx', ctx)
   console.log('sort', sort)
+  if (ctx.length > 0 && ctx.every(trigger => trigger.prop_id.endsWith('.active_tab'))) {
+    if (!mapVisible) {
+      return noUpdates(others + figures.maps.length)
+    }
+    addLocaleDate(data, p.date_columns)
+    dataFiltered = filterDataset(data, range)
+    return [...noUpdates(others),
+      ...updateMap(dataFiltered, figures.maps, p.map_x_label, p.map_y_label, getLastPosition(dataFiltered.trips), userViews)]
+  }
   if (ctx.length > 0 && ctx[0].prop_id.endsWith('sort_by')) {
     dataFiltered = filterDataset(data, range)
     // all of them: the other table gets new rows too and would lose its order
@@ -638,5 +738,5 @@ function filterAndSort (data, range, figures, p, log, sort, config, userViews = 
     outFigures.push(...updateMap(dataFiltered, figures.maps, p.map_x_label, p.map_y_label, getLastPosition(dataFiltered.trips), userViews))
     updateCardsValue(longTrips)
   }
-  return outFigures
+  return mapVisible ? outFigures : [...outFigures.slice(0, others), ...noUpdates(figures.maps.length)]
 }

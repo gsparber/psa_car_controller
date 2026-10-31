@@ -187,7 +187,7 @@ def get_home_layout():
     return html.Div([
         car_select(CAR_SELECT),
         dcc.Interval(id=POLL, interval=POLL_MS),
-        html.Div(render_status(cars[0]), id=STATUS_DIV),
+        html.Div(render_status(cars[0]), id=STATUS_DIV, className="home-status"),
     ], className="page")
 
 
