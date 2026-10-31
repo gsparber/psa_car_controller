@@ -12,6 +12,7 @@ from psa_car_controller.common.build_version import version_info
 from psa_car_controller.psa.constants import BRAND, realm_info
 from psa_car_controller.psa.oauth import rejected_grant_hint
 from psa_car_controller.psa.otp.otp import CONFIG_NAME as OTP_CONFIG_NAME
+from psa_car_controller.psacc.application.ha_mqtt import sends_unencrypted
 from psa_car_controller.web import units
 from psa_car_controller.psa.RemoteClient import TOKEN_ACCOUNT_FAILED, TOKEN_RATE_LIMITED, TOKEN_REMOTE_FAILED
 from psa_car_controller.web.app import dash_app
@@ -28,6 +29,18 @@ RECONNECT = "settings-reconnect"
 UNITS = "settings-units"
 LANGUAGE = "settings-language"
 LANGUAGE_SAVED = "settings-language-saved"
+HA_STATUS = "settings-ha-status"
+HA_WARNING = "settings-ha-warning"
+HA_ENABLED = "settings-ha-enabled"
+HA_TLS = "settings-ha-tls"
+HA_REMOVE_STORED = "settings-ha-remove-stored"
+HA_REMOVE_ROW = "settings-ha-remove-row"
+HA_STORED_HINT = "settings-ha-stored-hint"
+HA_SAVE = "settings-ha-save"
+# text fields of the form: field of parse_settings -> id
+HA_INPUTS = {"host": "settings-ha-host", "port": "settings-ha-port", "username": "settings-ha-username",
+             "password": "settings-ha-password", "discovery_prefix": "settings-ha-prefix",
+             "base_topic": "settings-ha-base-topic"}
 
 # account states
 NO_ACCOUNT, LOGIN_FAILED, LOGIN_RETRYING, LOGGED_IN = "none", "failed", "retrying", "ok"
@@ -210,6 +223,77 @@ def set_language(value):
     return True
 
 
+def _ha_status():
+    config = app().config.Home_Assistant_MQTT
+    client = getattr(app(), "home_assistant", None)
+    icon = "bi-house"
+    error = None
+    if client is not None and client.is_connected():
+        row = _status_row(icon, "Broker", "Connected", True)
+    elif client is not None:
+        error = client.last_error
+        row = _status_row(icon, "Broker", "Not connected", False) if error else \
+            _status_row(icon, "Broker", "Connecting", "warn")
+    elif not config.is_enable():
+        return html.Div(html.Div([html.I(className=f"bi {icon} me-3"), html.Span("Broker", className="flex-grow-1"),
+                                  html.Span("Off", className="text-body-secondary")],
+                                 className="list-group-item d-flex align-items-center"), className="list-group mb-3")
+    elif app().ha_start_failed:
+        error = "It can't start, see the log."
+        row = _status_row(icon, "Broker", "Not connected", False)
+    else:
+        row = _status_row(icon, "Broker", "Starts after login", "warn")
+    return html.Div([html.Div(row, className="list-group mb-3"),
+                     dbc.Alert(error, color="danger", className="small") if error else None])
+
+
+def _ha_warning(enabled, host, tls):
+    if not enabled or not sends_unencrypted(host, tls):
+        return None
+    return dbc.Alert("This broker is not local and TLS is off: the broker password and your car's data would cross "
+                     "the network unencrypted. Turn on TLS.", color="danger", className="small")
+
+
+def _ha_password_hint(password):
+    return "Set. Leave empty to keep it." if password else "Not set."
+
+
+def _ha_field(field, label, value, extra=None, **kwargs):
+    return html.Div([dbc.Label(label, html_for=HA_INPUTS[field]),
+                     dbc.Input(id=HA_INPUTS[field], value=value, **kwargs),
+                     dbc.FormFeedback(id=HA_INPUTS[field] + "-feedback", type="invalid"), *(extra or [])],
+                    className="mb-3")
+
+
+def _home_assistant():
+    config = app().config.Home_Assistant_MQTT
+    return ui.section("Home Assistant", [
+        html.Div(_ha_status(), id=HA_STATUS),
+        html.Div([
+            dbc.Switch(id=HA_ENABLED, value=config.enabled, label="Publish to my MQTT broker", className="mb-3"),
+            dbc.Row([
+                dbc.Col(_ha_field("host", "Host", config.host or "", type="text", autoComplete="off",
+                                  placeholder="192.168.1.10"), xs=8),
+                dbc.Col(_ha_field("port", "Port", config.port, type="number", min=1, max=65535, step=1,
+                                  inputMode="numeric"), xs=4)], className="g-2"),
+            dbc.Switch(id=HA_TLS, value=config.tls, label="TLS (the broker usually listens on port 8883 then)",
+                       className="mb-3"),
+            html.Div(_ha_warning(config.enabled, config.host, config.tls), id=HA_WARNING),
+            _ha_field("username", "User name", config.username or "", type="text", autoComplete="off"),
+            # never filled in: the password stays on the server. new-password: no browser fills in the account's one
+            _ha_field("password", "Password", "", type="password", autoComplete="new-password", extra=[
+                html.Small(_ha_password_hint(config.password), id=HA_STORED_HINT,
+                           className="text-body-secondary d-block mt-1"),
+                html.Div(dbc.Checkbox(id=HA_REMOVE_STORED, value=False, label="Remove the stored password"),
+                         id=HA_REMOVE_ROW, className="mt-1" if config.password else "d-none")]),
+            _ha_field("discovery_prefix", "Discovery prefix", config.discovery_prefix, type="text", autoComplete="off"),
+            _ha_field("base_topic", "Base topic", config.base_topic, type="text", autoComplete="off"),
+            dbc.Button("Save", id=HA_SAVE, n_clicks=0, color="primary", className="w-100 big-button"),
+        ], className="card-block"),
+        html.Small("Sends your cars to Home Assistant through your own MQTT broker. Applied right away, no restart.",
+                   className="text-body-secondary d-block")])
+
+
 def _more():
     version, url = version_info()
     return ui.section("More", [html.Div([
@@ -228,6 +312,7 @@ def get_settings_layout():
         html.Div(render(state), id=CONTENT),
         _units(),
         _language(),
+        _home_assistant(),
         _more(),
     ], className="page")
 
@@ -272,6 +357,68 @@ def change_language(value):
     if not set_language(value):
         return (*ui.toast_message("Can't save the setting, see the log", ok=False), no_update)
     return (*ui.toast_message("Language: " + language.LANGUAGES[value]), value)
+
+
+@dash_app.callback(Output(HA_STATUS, "children"), Input(POLL, "n_intervals"), prevent_initial_call=True)
+def refresh_home_assistant(_):
+    # on its own: the form next to it must stay as the user is filling it in
+    return _ha_status()
+
+
+# on leaving the field, not on each key. Not debounce on the input: a tap on Save may not leave it first on a phone
+@dash_app.callback(Output(HA_WARNING, "children"), Input(HA_ENABLED, "value"), Input(HA_TLS, "value"),
+                   Input(HA_INPUTS["host"], "n_blur"), State(HA_INPUTS["host"], "value"), prevent_initial_call=True)
+def warn_home_assistant(enabled, tls, _, host):
+    return _ha_warning(enabled, host, tls)
+
+
+def _ha_form_result(errors):
+    """invalid and feedback text of each field."""
+    result = []
+    for field in HA_INPUTS:
+        result += [field in errors, errors.get(field, "")]
+    return result
+
+
+@dash_app.callback(*ui.toast_outputs(),
+                   *[output for input_id in HA_INPUTS.values() for output in
+                     (Output(input_id, "invalid"), Output(input_id + "-feedback", "children"))],
+                   Output(HA_INPUTS["password"], "value"), Output(HA_REMOVE_STORED, "value"),
+                   Output(HA_REMOVE_ROW, "className"), Output(HA_STORED_HINT, "children"),
+                   Output(HA_STATUS, "children", allow_duplicate=True),
+                   Output(HA_WARNING, "children", allow_duplicate=True),
+                   Input(HA_SAVE, "n_clicks"), State(HA_ENABLED, "value"), State(HA_TLS, "value"),
+                   State(HA_REMOVE_STORED, "value"), *[State(input_id, "value") for input_id in HA_INPUTS.values()],
+                   prevent_initial_call=True)
+def save_home_assistant(n_clicks, enabled, tls, remove_password, *values):
+    """Nothing here may show or log the form, it holds the password; the field names of the errors are fine."""
+    if not n_clicks:
+        raise PreventUpdate
+    previous = app().config.Home_Assistant_MQTT
+    form = dict(zip(HA_INPUTS, values), enabled=enabled, tls=tls, remove_password=remove_password)
+    keep_form = [no_update] * 6
+    try:
+        errors = app().save_home_assistant(form)
+    except (OSError, ValueError):
+        logger.exception("Can't save the Home Assistant settings")
+        return (*ui.toast_message("Can't save the setting, see the log", ok=False), *_ha_form_result({}), *keep_form)
+    if errors:
+        logger.info("Home Assistant settings refused, fields: %s", sorted(errors))
+        return (*ui.toast_message("Not saved, check the marked fields", ok=False), *_ha_form_result(errors),
+                *keep_form)
+    config = app().config.Home_Assistant_MQTT
+    if config == previous and not app().ha_start_failed:
+        message = ui.toast_message("No changes")
+    elif app().ha_start_failed:
+        message = ui.toast_message("Saved, but it can't start, see the log", ok=False)
+    elif not config.is_enable():
+        message = ui.toast_message("Saved, MQTT for Home Assistant is off")
+    elif getattr(app(), "home_assistant", None) is None:
+        message = ui.toast_message("Saved, it starts after the login")
+    else:
+        message = ui.toast_message("Saved, connecting to the broker")
+    return (*message, *_ha_form_result({}), "", False, "mt-1" if config.password else "d-none",
+            _ha_password_hint(config.password), _ha_status(), _ha_warning(config.enabled, config.host, config.tls))
 
 
 # only once it is saved: a choice that failed would look applied until the next page

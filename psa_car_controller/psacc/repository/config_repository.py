@@ -196,7 +196,7 @@ class HomeAssistantMqttConfig(SectionConfig):
     host: Optional[str] = None
     port: int = 1883
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, repr=False)  # a logged config or error must not show it
     tls: bool = False
     discovery_prefix: str = "homeassistant"
     base_topic: str = "psa_car_controller"

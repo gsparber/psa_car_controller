@@ -11,9 +11,13 @@ VISIBLE_SUFFIX = 4
 # "access_token": "x" / 'refresh_token': 'x' / client_secret=x / password: x / vehicleId=x
 # the quotes can be escaped: a dict turned to str and logged inside a list or a json document
 _KEY_VALUE_RE = re.compile(
-    r"""(?P<key>\\?["']?[\w-]*(?:token|secret|password|vehicle[_-]?id)\\?["']?\s*[:=]\s*\\?["']?)"""
+    r"""(?P<key>\\?["']?[\w-]*(?:token|secret|password|vehicle[_-]?id|api[_-]?key|appid)\\?["']?\s*[:=]\s*\\?["']?)"""
     r"""(?!None\b|null\b)(?P<value>(?:(?!\\["'])[^"'\s,;&})\]])+)""",
     re.IGNORECASE)
+# an exception of requests holds the url with its query: position (tlm, lat, lon), login (jsonRequest), OTP (sid, code).
+# The values are url-encoded, the pattern above can't look inside
+_QUERY_PARAM_RE = re.compile(r"""(?P<key>[?&](?:tlm|lat|lon|locations|jsonRequest|sid|code|macid)=)[^&\s'"()]+""",
+                             re.IGNORECASE)
 _VIN_KEY_RE = re.compile(r"""\\?["']vin\\?["']\s*:""", re.IGNORECASE)
 _ID_KEY_RE = re.compile(r"""(?P<key>\\?["']id\\?["']\s*:\s*\\?["'])(?P<value>(?:(?!\\["'])[^"'])+)""", re.IGNORECASE)
 _BEARER_RE = re.compile(r"(?P<key>Bearer\s+)(?P<value>[\w\-.~+/]+=*)", re.IGNORECASE)
@@ -109,6 +113,7 @@ class SensitiveDataFilter(logging.Filter):
             if secret in text:
                 text = text.replace(secret, mask_value(secret))
         text = _KEY_VALUE_RE.sub(lambda m: m.group("key") + MASK, text)
+        text = _QUERY_PARAM_RE.sub(lambda m: m.group("key") + MASK, text)
         text = _mask_vehicle_ids(text)
         text = _BEARER_RE.sub(lambda m: m.group("key") + MASK, text)
         text = _VIN_RE.sub(lambda m: mask_value(m.group(0)), text)

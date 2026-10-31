@@ -6,17 +6,21 @@ sent in metric units (Home Assistant converts them to the units of its user). To
 VIN itself, and the VIN is never logged here.
 """
 import hashlib
+import ipaddress
 import json
 import logging
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.remote_commands import RemoteCommand
+from psa_car_controller.psa.setup.worker_oauth import is_local_host
 from psa_car_controller.psacc.model.car import Car
+from psa_car_controller.psacc.repository.config_repository import HomeAssistantMqttConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,13 @@ HORN_COUNT = 1
 LIGHTS_DURATION = 10  # s, the car flashes them about 10 s whatever is asked
 RECONNECT_MIN_DELAY = 1
 RECONNECT_MAX_DELAY = 120
+STOP_TIMEOUT = 5  # s
+BROKER_UNREACHABLE = "Can't reach the broker: check the host, the port and TLS"
+MIN_PORT = 1
+MAX_PORT = 65535
+MAX_TEXT_LENGTH = 1024
+MAX_HOST_LENGTH = 253
+HOST_LABEL = re.compile(r"\w(?:[\w-]{0,61}\w)?")
 
 # entity key (also its topic level) -> discovery fields; "json_attributes" adds an attributes topic
 SENSORS = {
@@ -132,6 +143,134 @@ def car_states(car: Car, charge_limit=None) -> Dict[str, object]:
     return states
 
 
+def sends_unencrypted(host, tls) -> bool:
+    """True when the broker login and the car data would cross a foreign network unencrypted."""
+    host = host.strip() if isinstance(host, str) else ""
+    return bool(host) and not tls and not is_local_host(host)
+
+
+def _host_error(host: str) -> Optional[str]:
+    if ":" in host:
+        try:
+            ipaddress.IPv6Address(host)
+            return None
+        except ValueError:
+            return "Only the host name or IP address, without mqtt:// or a port"
+    labels = host[:-1].split(".") if host.endswith(".") else host.split(".")
+    if len(host) > MAX_HOST_LENGTH or not all(HOST_LABEL.fullmatch(label) for label in labels):
+        return "Only the host name or IP address, without mqtt:// or a port"
+    if labels[-1].isdigit():  # a host name never ends with a number: this was meant as an IP address
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError:
+            return "Not a valid IP address"
+    return None
+
+
+def _text_error(text) -> Optional[str]:
+    """config.ini keeps a value on one line and without the spaces around it: others would come back different."""
+    if not isinstance(text, str):
+        return "Not a text"
+    if len(text) > MAX_TEXT_LENGTH:
+        return f"At most {MAX_TEXT_LENGTH} characters"
+    if not text.isprintable():
+        return "Can't contain line breaks or control characters"
+    if text != text.strip():
+        return "Can't start or end with a space"
+    return None
+
+
+def _topic_error(topic) -> Optional[str]:
+    error = _text_error(topic)
+    if error:
+        return error
+    topic = topic.strip("/")
+    if not topic:
+        return "Can't be empty"
+    if topic.startswith("$") or any(char in topic for char in "+# "):
+        return "Can't contain +, # or spaces, or start with $"
+    return None
+
+
+def _port(value) -> Tuple[Optional[int], Optional[str]]:
+    error = f"A whole number from {MIN_PORT} to {MAX_PORT}"
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    elif isinstance(value, str) and value.strip().isdecimal():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or not MIN_PORT <= value <= MAX_PORT:
+        return None, error
+    return value, None
+
+
+def _same_destination(new, current) -> bool:
+    """Same broker, and not less protected on the way there, than the stored password was meant for."""
+    return ((new["host"] or "").lower() == (current.host or "").lower() and new["port"] == current.port
+            and (new["tls"] or not current.tls))
+
+
+def _password(form, values, current, destination_known) -> Tuple[Optional[str], Optional[str]]:
+    """(the password to store, the error). An empty field keeps the stored one, removing it takes the checkbox."""
+    typed = form.get("password") or ""
+    remove = form.get("remove_password") is True
+    error = _text_error(typed)
+    if error:
+        return current.password, error
+    if typed and remove:
+        return current.password, "Either type a password or remove it"
+    if remove:
+        return None, None
+    if typed:
+        return typed, None
+    if current.password and destination_known and not _same_destination(values, current):
+        # no login on this page: without this, anyone who can open it could send the stored password to their server
+        return current.password, "Type the password again: it would go to another broker or without TLS"
+    return current.password, None
+
+
+def parse_settings(form: dict, current: HomeAssistantMqttConfig) -> Tuple[Optional[HomeAssistantMqttConfig], dict]:
+    """Checks what the settings form sent, which can be anything: (the new config, None for errors) or (None, the error
+    of each field). Errors never repeat what was typed."""
+    errors = {}
+    host = form.get("host") or ""
+    host = host.strip() if isinstance(host, str) else host
+    error = _text_error(host) or (_host_error(host) if host else None)
+    enabled = form.get("enabled") is True
+    if error:
+        errors["host"] = error
+    elif enabled and not host:
+        errors["host"] = "Required to connect"
+    port, error = _port(form.get("port"))
+    if error:
+        errors["port"] = error
+    username = form.get("username") or ""
+    username = username.strip() if isinstance(username, str) else username
+    error = _text_error(username)
+    if error:
+        errors["username"] = error
+    values = {"enabled": enabled, "host": host or None, "port": port, "username": username or None,
+              "tls": form.get("tls") is True}
+    for field in ("discovery_prefix", "base_topic"):
+        topic = form.get(field)
+        topic = topic.strip() if isinstance(topic, str) else topic
+        error = _topic_error(topic)
+        if error:
+            errors[field] = error
+        else:
+            values[field] = topic.strip("/")
+    # the same topic would take this app's own availability for a restart of Home Assistant, again and again
+    if values.get("discovery_prefix") and values.get("discovery_prefix") == values.get("base_topic"):
+        errors["base_topic"] = "Can't be the same as the discovery prefix"
+    password, error = _password(form, values, current, "host" not in errors and "port" not in errors)
+    if error:
+        errors["password"] = error
+    elif password and not username and "username" not in errors:
+        errors["username"] = "Required with a password, or remove the password"
+    if errors:
+        return None, errors
+    return HomeAssistantMqttConfig(password=password, **values), {}
+
+
 class HomeAssistantMqtt:
     """MQTT discovery publisher and command receiver for Home Assistant."""
 
@@ -150,6 +289,7 @@ class HomeAssistantMqtt:
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
         self._stopped = False
+        self.last_error: Optional[str] = None  # for the settings page: fixed texts and broker reasons, no secrets
         # commands run here: they may refresh tokens or talk to the PSA broker, the paho loop must not wait for them
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ha-mqtt-command")
 
@@ -162,10 +302,14 @@ class HomeAssistantMqtt:
             client.tls_set()
         client.will_set(self.availability_topic, OFFLINE, qos=1, retain=True)
         client.on_connect = self._on_connect
+        client.on_connect_fail = self._on_connect_fail
         client.on_disconnect = self._on_disconnect
         client.on_message = self._on_message
         client.reconnect_delay_set(RECONNECT_MIN_DELAY, RECONNECT_MAX_DELAY)
         logger.info("Home Assistant MQTT: connecting to %s:%s", self.config.host, self.config.port)
+        if sends_unencrypted(self.config.host, self.config.tls):
+            logger.warning("Home Assistant MQTT: the broker %s is not local and TLS is off, the broker login and the "
+                           "car data cross the network unencrypted", self.config.host)
         client.connect_async(self.config.host, int(self.config.port), keepalive=60)
         client.loop_start()
         self.psacc.info_callback.append(self.publish_states)
@@ -187,7 +331,11 @@ class HomeAssistantMqtt:
             self.client.publish(self.availability_topic, OFFLINE, qos=1, retain=True)
             self.client.disconnect()
         finally:
-            self.client.loop_stop()
+            # a connected client ends at once. In a TLS handshake with a silent server paho waits for the keepalive,
+            # 60 s, while this holds up the page and any login: that thread ends by itself and nothing reaches a broker
+            closing = threading.Thread(target=self.client.loop_stop, daemon=True, name="ha-mqtt-stop")
+            closing.start()
+            closing.join(STOP_TIMEOUT)
             self._executor.shutdown(wait=False)
 
     def _schedule(self):
@@ -204,19 +352,32 @@ class HomeAssistantMqtt:
             logger.exception("Home Assistant MQTT: publish states")
         self._schedule()
 
+    def is_connected(self) -> bool:
+        return not self._stopped and self.client.is_connected()
+
     def _on_connect(self, client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
+        if self._stopped:  # a slow handshake ended after stop: "online" would overwrite the state of its successor
+            return
         if reason_code.is_failure:
             logger.error("Home Assistant MQTT: connection refused: %s", reason_code)
+            self.last_error = f"Refused by the broker: {reason_code}"
             return
         logger.info("Home Assistant MQTT: connected")
+        self.last_error = None
         client.subscribe(f"{self.base}/+/+/set")
         client.subscribe(f"{self.prefix}/status")
         self.publish_all()
 
-    @staticmethod
-    def _on_disconnect(client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
+    def _on_connect_fail(self, client, userdata):  # pylint: disable=unused-argument
+        if self.last_error != BROKER_UNREACHABLE:  # it retries for as long as the broker is away: tell it once
+            logger.warning("Home Assistant MQTT: can't reach the broker, retrying")
+        self.last_error = BROKER_UNREACHABLE
+
+    def _on_disconnect(self, client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
         if reason_code.is_failure:
             logger.warning("Home Assistant MQTT: disconnected (%s), reconnecting", reason_code)
+            # a refused login disconnects as well: its reason tells more
+            self.last_error = self.last_error or f"Disconnected: {reason_code}"
 
     def publish_all(self):
         """Availability, discovery and every state: after a (re)connect or a restart of Home Assistant."""
@@ -229,6 +390,8 @@ class HomeAssistantMqtt:
     def _publish(self, topic, payload, retain=True, force=False):
         if not isinstance(payload, str):
             payload = json.dumps(payload, default=str)
+        if self._stopped:  # a command still running after the settings changed: its client is closed
+            return
         with self._lock:
             if not force and self._published.get(topic) == payload:
                 return

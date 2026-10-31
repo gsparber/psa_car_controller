@@ -137,7 +137,8 @@ class PSAClient:
                 remote_credentials.access_token, remote_credentials.refresh_token,
                 self.service_information.client_secret,
                 # the MQTT customer id only differs from customer_id by its brand prefix
-                self.customer_id, self.customer_id and self.customer_id[2:]] + \
+                self.customer_id, self.customer_id and self.customer_id[2:],
+                self.abrp.token, self.abrp.api_key, self.weather_api, Ecomix.co2_signal_key] + \
             [car.vin for car in self.vehicles_list] + [car.vehicle_id for car in self.vehicles_list]
 
     def get_app_name(self):
@@ -278,7 +279,11 @@ class PSAClient:
         self.remote_client.apply_mqtt_state(car)
         # the same status again would only record the same data again
         if self._record_enabled and newer:
-            self.record_info(car)
+            try:
+                self.record_info(car)
+            except Exception:  # pylint: disable=broad-except
+                # the status itself is fine: the caller, the charge control and the next cars still need it
+                logger.exception("record_info of %s: ", car.vin)
 
     def __refresh_vehicle_info(self):
         if self.info_refresh_rate is None:
@@ -289,7 +294,7 @@ class PSAClient:
             for index, car in enumerate(self.vehicles_list):
                 if index > 0 and not self._wait_before_next_car():
                     return  # stopped meanwhile
-                self.get_vehicle_info(car.vin)
+                self._refresh_car(car)
                 if self._rate_limited:  # the next car would be refused too
                     break
         except RateLimitException as e:
@@ -303,13 +308,24 @@ class PSAClient:
         self._refresh_vehicle_services()
         # scheduled once the status is known: the delay depends on it
         self.__schedule_refresh()
+        self._run_info_callbacks()
+
+    def _refresh_car(self, car: Car):
         try:
-            for callback in self.info_callback:
+            self.get_vehicle_info(car.vin)
+        except (RateLimitException, AuthenticationRequiredException):
+            raise  # the same for the next car
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("refresh_vehicle_info of %s: ", car.vin)
+
+    def _run_info_callbacks(self):
+        for callback in list(self.info_callback):
+            try:
                 callback()
-        except AuthenticationRequiredException:
-            logger.debug("refresh_vehicle_info: not connected")
-        except BaseException:
-            logger.exception("refresh_vehicle_info: ")
+            except AuthenticationRequiredException:
+                logger.debug("refresh_vehicle_info: not connected")
+            except BaseException:
+                logger.exception("refresh_vehicle_info: ")
 
     def _car_stagger_delay(self) -> float:
         """Wait between two cars, short enough for every car to be asked before the next refresh."""
@@ -486,9 +502,8 @@ class PSAClient:
 
         temp = getattr(getattr(getattr(car.status, "environment", None), "air", None), "temp", None)
 
-        logger.debug("vin:%s longitude:%s latitude:%s date:%s mileage:%s level:%s charge_date:%s level_fuel:"
-                     "%s moving:%s temp:%s", car.vin, longitude, latitude, date, mileage, level, charge_date,
-                     level_fuel, moving, temp)
+        logger.debug("vin:%s date:%s mileage:%s level:%s charge_date:%s level_fuel:%s moving:%s temp:%s",
+                     car.vin, date, mileage, level, charge_date, level_fuel, moving, temp)
         Database.record_position(self.weather_api, car.vin, mileage, latitude, longitude, altitude, date, level,
                                  level_fuel, moving, temp)
         self.abrp.call(car, Database.get_last_temp(car.vin))

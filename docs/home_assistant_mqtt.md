@@ -11,8 +11,18 @@ keeps with the Stellantis servers and only talks to the broker you configure.
 
 1. In Home Assistant, set up an MQTT broker and the MQTT integration (Settings → Devices & services → MQTT).
    Discovery must stay enabled (it is by default, prefix `homeassistant`).
-2. Fill the `[Home Assistant MQTT]` section of `config.ini` (created with the defaults below on first start) and
-   restart PSACC:
+2. In PSACC, open **Settings → Home Assistant**, fill in your broker and press **Save**. It applies right away, no
+   restart: the old connection ends cleanly (availability `offline`), a new one connects and publishes discovery again.
+   The page shows the state of the connection (*Connected*, *Connecting*, *Not connected* with the reason, *Off*).
+
+   - **Password:** the field always stays empty, *Set* tells that one is stored. Empty keeps it, **Remove the stored
+     password** removes it. After a change of the host or the port, or after turning TLS off, type it again: the web UI
+     has no login, without this anyone who can open the page could send your stored password to their own server.
+   - **TLS:** the certificate of the broker has to be trusted by the system. A red warning appears for a broker that
+     isn't local with TLS off, because the password and the data of your cars would cross the network unencrypted.
+
+   The settings are the `[Home Assistant MQTT]` section of `config.ini` (created with the defaults below on first
+   start). Editing the file by hand still works and takes a restart:
 
    ```ini
    [Home Assistant MQTT]
@@ -29,7 +39,7 @@ keeps with the Stellantis servers and only talks to the broker you configure.
    ```
 
    The password is stored in `config.ini` like the rest of the settings: protect the file. It is masked in the logs
-   and left out of the `/settings` API answer.
+   and left out of the `/settings` API answer. This section can't be changed through the `/settings/<section>` API.
 
 ## Entities
 
@@ -77,6 +87,7 @@ PSACC subscribes to `homeassistant/status` and publishes everything again when H
 
 ## Removing it
 
-Set `enabled = false` and restart. The retained discovery configs stay on the broker: delete the device in Home
-Assistant (MQTT device page → Delete), or clear the retained `homeassistant/+/psacc_…/+/config` topics with an MQTT
-client. The same goes for a car removed from your account.
+Turn it off in the settings (or set `enabled = false` and restart). The retained discovery configs stay on the broker:
+delete the device in Home Assistant (MQTT device page → Delete), or clear the retained
+`homeassistant/+/psacc_…/+/config` topics with an MQTT client. The same goes for a car removed from your account, and
+for the old broker or discovery prefix after changing them: their entities stay there as unavailable.

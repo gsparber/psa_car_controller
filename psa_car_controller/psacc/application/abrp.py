@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import datetime
 from json.decoder import JSONDecodeError
 
@@ -9,6 +10,8 @@ from psa_car_controller.psacc.model.car import Car
 
 logger = logging.getLogger(__name__)
 TIMEOUT_IN_S = 10
+# each try holds up the refresh of the cars until the timeout, and the car status comes again soon anyway
+RETRY_DELAY_IN_S = 300
 
 
 class Abrp:
@@ -21,6 +24,7 @@ class Abrp:
         self.token = token
         self.abrp_enable_vin = set(abrp_enable_vin)
         self.proxies = None
+        self._retry_at = None
 
     def enable_abrp(self, vin, enable):
         if enable:
@@ -28,11 +32,27 @@ class Abrp:
         else:
             self.abrp_enable_vin.discard(vin)
 
+    def _is_paused(self) -> bool:
+        return self._retry_at is not None and time.monotonic() < self._retry_at
+
+    def _failed(self, reason):
+        if self._retry_at is None:  # it can last for hours: tell it once
+            logger.warning("ABRP is unavailable (%s), trying again every %d s", reason, RETRY_DELAY_IN_S)
+        self._retry_at = time.monotonic() + RETRY_DELAY_IN_S
+
+    def _succeeded(self):
+        if self._retry_at is not None:
+            logger.info("ABRP is available again")
+        self._retry_at = None
+
     def call(self, car: Car, ext_temp: float = None):
         try:
             if self.token is None or len(self.token) == 0:
                 logger.debug("No abrp token provided")
             elif car.vin in self.abrp_enable_vin:
+                if self._is_paused():
+                    logger.debug("ABRP is unavailable, not asking it now")
+                    return False
                 energy = car.status.get_energy('Electric')
 
                 if energy.level is None:
@@ -56,11 +76,17 @@ class Abrp:
                                             verify=self.proxies is None, timeout=TIMEOUT_IN_S)
                 logger.debug(response.text)
                 try:
-                    return json.loads(response.text)["status"] == "ok"
-                except (JSONDecodeError, KeyError):
-                    logger.error("Bad response from ABRP API: %s", response.text)
+                    result = json.loads(response.text)["status"] == "ok"
+                except (JSONDecodeError, KeyError, TypeError):
+                    self._failed(f"bad response, HTTP {response.status_code}")
                     return False
-        except (AttributeError, IndexError, ValueError):
+                self._succeeded()
+                return result
+        except requests.RequestException as e:
+            # only the type: the text holds the url with the position, the token and the api key
+            self._failed(type(e).__name__)
+        except Exception:  # pylint: disable=broad-except
+            # a problem with this data must not stop the recording of the charge
             logger.exception("abrp:")
         return False
 

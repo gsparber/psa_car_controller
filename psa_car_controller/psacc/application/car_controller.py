@@ -9,7 +9,7 @@ from typing import Optional
 
 from .charge_control import ChargeControls
 from .charging import Charging
-from .ha_mqtt import HomeAssistantMqtt
+from .ha_mqtt import HomeAssistantMqtt, parse_settings
 from psa_car_controller.common.sensitive_filter import sensitive_filter
 from psa_car_controller.psacc.model.car import describe_cars
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
@@ -57,6 +57,7 @@ class PSACarController(metaclass=Singleton):
     # a login and the reconnect button can run at the same time: one client and one mqtt connection at the end.
     # A request that reads the app doesn't wait: it sees the old client or the complete new one.
     _services_lock = threading.RLock()
+    ha_start_failed = False
 
     def __init__(self):
         self.args = parse_args()
@@ -156,16 +157,50 @@ class PSACarController(metaclass=Singleton):
 
     def start_home_assistant(self):
         """Publish to Home Assistant through the user's MQTT broker, only when enabled in config.ini."""
-        if getattr(self, "home_assistant", None) is not None:
-            # load_app runs again after a login: a new one publishes the cars of the new PSA client
-            self.home_assistant.stop()
-            self.home_assistant = None
-        ha_config = self.config.Home_Assistant_MQTT
-        if not ha_config.is_enable():
-            return
-        self.home_assistant = HomeAssistantMqtt(ha_config, self.myp, lambda: self.chc,
-                                                remote_enabled=self.remote_control)
-        self.home_assistant.start()
+        with self._services_lock:
+            if getattr(self, "home_assistant", None) is not None:
+                # load_app runs again after a login: a new one publishes the cars of the new PSA client
+                self.home_assistant.stop()
+                self.home_assistant = None
+            ha_config = self.config.Home_Assistant_MQTT
+            # without an account load_app didn't get this far, it starts after the login
+            if not ha_config.is_enable() or getattr(self, "myp", None) is None:
+                return
+            self.home_assistant = HomeAssistantMqtt(ha_config, self.myp, lambda: self.chc,
+                                                    remote_enabled=self.remote_control)
+            self.home_assistant.start()
+
+    def save_home_assistant(self, form: dict) -> dict:
+        """Applies the settings form without a restart: checks it, saves it, then connects with one new client.
+        Returns the errors of the form, {} when it was fine. An OSError or ValueError means nothing was saved."""
+        with self._services_lock:  # the stored password and the save belong together, like the old and the new client
+            previous = self.config.Home_Assistant_MQTT
+            new_config, errors = parse_settings(form, previous)
+            if errors or (new_config == previous and not self.ha_start_failed):
+                return errors  # the same again, a double click: no reason to drop the connection
+            self.config.Home_Assistant_MQTT = new_config
+            try:
+                self.config.write_config()
+            except (OSError, ValueError):
+                self.config.Home_Assistant_MQTT = previous
+                raise
+            self.ha_start_failed = False
+            try:
+                self.start_home_assistant()
+            except (OSError, ValueError, RuntimeError):
+                # saved, but the old client is stopped or the new one half started
+                logger.exception("Home Assistant MQTT: can't start")
+                self.ha_start_failed = True
+                self.__drop_home_assistant()
+            return {}
+
+    def __drop_home_assistant(self):
+        failed, self.home_assistant = getattr(self, "home_assistant", None), None
+        if failed is not None:
+            try:
+                failed.stop()
+            except (OSError, ValueError, RuntimeError):
+                logger.exception("Home Assistant MQTT: can't stop")
 
     def __start_services(self):
         self.myp.manager.start_scheduled_refresh()

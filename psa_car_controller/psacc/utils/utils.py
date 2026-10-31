@@ -20,9 +20,10 @@ def get_temp(latitude: str, longitude: str, api_key: str) -> float:
             temp = weather_res_json.get("current", weather_res_json.get("main"))["temp"]
             logger.debug("Temperature :%fc", temp)
             return temp
-    except ConnectionError:
-        logger.error("Can't connect to openweathermap :", exc_info=True)
-    except (KeyError, TypeError):
+    except (requests.RequestException, ConnectionError) as e:
+        # only the type: the text holds the url with the position and the api key
+        logger.error("Can't connect to openweathermap (%s)", type(e).__name__)
+    except (KeyError, TypeError, ValueError, AttributeError):
         logger.exception("Unable to get temperature from openweathermap :")
     return None
 

@@ -50,7 +50,7 @@ def worker_host(worker_url: str) -> Optional[str]:
         return None
 
 
-def _is_local_host(host: str) -> bool:
+def is_local_host(host: str) -> bool:
     host = host.lower().rstrip(".")
     if host == "localhost" or host.endswith(LOCAL_SUFFIXES):
         return True
@@ -65,7 +65,7 @@ def _is_local_host(host: str) -> bool:
 def is_insecure_worker_url(worker_url: str) -> bool:
     """True when credentials would cross a foreign network unencrypted: http:// to a non-local address."""
     host = worker_host(worker_url)
-    return worker_url.strip().lower().startswith("http://") and not (host and _is_local_host(host))
+    return worker_url.strip().lower().startswith("http://") and not (host and is_local_host(host))
 
 
 def _clean_message(message, email: str, password: str) -> str:

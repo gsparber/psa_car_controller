@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 class Ecomix:
     _cache = {}
+    _failed_at = {}
     co2_signal_key = None
 
     @staticmethod
@@ -34,10 +35,14 @@ class Ecomix:
                 },
                 timeout=TIMEOUT_IN_S
             )
-        except RequestException:
-            logger.exception("get_data_france: ")
+        except RequestException as e:
+            logger.error("Can't get the CO2 values of France (%s)", type(e).__name__)
             return None
-        etree = ElT.fromstring(res.text)
+        try:
+            etree = ElT.fromstring(res.text)
+        except ElT.ParseError:
+            logger.error("Bad answer for the CO2 values of France (HTTP %s)", res.status_code)
+            return None
         period_start = (start.hour + int(start.minute / 30)) * 4
         period_end = (end.hour + int(end.minute / 30)) * 4
 
@@ -50,7 +55,7 @@ class Ecomix:
             while int(valeur.attrib["periode"]) != period_end:
                 co2_per_kw.append(int(valeur.text))
                 valeur = next(valeurs)
-        except StopIteration:
+        except (StopIteration, KeyError, TypeError, ValueError):
             logger.exception("Can't get CO2 value between %s %s", start, end)
             return None
         try:
@@ -65,18 +70,23 @@ class Ecomix:
                 now = datetime.utcnow().replace(tzinfo=UTC)
                 country_code = Ecomix.get_country(latitude, longitude, country_code_default)
                 if country_code is None:
-                    logger.warning("Can't find country for %s %s", latitude, longitude)
+                    logger.warning("Can't find the country of the car")
                     return False
                 if country_code not in Ecomix._cache:
                     Ecomix._cache[country_code] = []
                 elif len(Ecomix._cache[country_code]) > 0 and \
                         (now - Ecomix._cache[country_code][-1][0]).total_seconds() < CO2_SIGNAL_REQ_INTERVAL:
                     return False
+                if (now - Ecomix._failed_at.get(country_code, datetime.min.replace(tzinfo=UTC))).total_seconds() \
+                        < CO2_SIGNAL_REQ_INTERVAL:  # each try can hold up the refresh until the timeout
+                    return False
                 res = requests.get(CO2_SIGNAL_URL + "/v3/carbon-intensity/latest",
                                    headers={"auth-token": Ecomix.co2_signal_key},
                                    params={"zone": country_code},
                                    timeout=TIMEOUT_IN_S)
                 if res.status_code != 200:
+                    logger.warning("Bad answer from electricitymaps (HTTP %s)", res.status_code)
+                    Ecomix._failed_at[country_code] = now
                     return False
 
                 data = res.json()
@@ -85,8 +95,13 @@ class Ecomix:
                     logger.error("carbonIntensity invalid value: '%s'", value)
                     return False
                 Ecomix._cache[country_code].append([now, value])
+                Ecomix._failed_at.pop(country_code, None)
                 return True
-            except (NameError, KeyError):
+            except RequestException as e:
+                logger.warning("Can't reach electricitymaps (%s)", type(e).__name__)
+                Ecomix._failed_at[country_code] = now
+                return False
+            except (NameError, KeyError, TypeError, ValueError):
                 logger.debug("ecomix:", exc_info=True)
                 return False
         else:
@@ -116,7 +131,7 @@ class Ecomix:
             country_code = location["country_code"]
             return country_code
         except (UnicodeDecodeError, IndexError, ValueError):
-            logger.error("Can't find country for %s %s", latitude, longitude)
+            logger.error("Can't find the country of the car")
             # return None
             country_code = country_code_default
             logger.warning("Using country of origin : %s (wrong co2 when traveling abroad)", country_code)

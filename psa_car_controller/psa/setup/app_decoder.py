@@ -136,6 +136,12 @@ class InitialSetup:
                                 timeout=TIMEOUT_IN_S
                                 )
             data = res.json()
+        except requests.RequestException as ex:
+            # only the type: the text holds the url, and its query the email and the password
+            logger.error("Can't reach the login service of the brand %s (%s)", apk_parser.host_brandid_prod,
+                         type(ex).__name__)
+            raise ConnectionError("The login service of the brand did not answer correctly. This is usually a "
+                                  "temporary problem on the Stellantis side, please try again later.") from None
         except Exception as ex:
             msg = traceback.format_exc() + f"\nHOST_BRANDID : {apk_parser.host_brandid_prod} " \
                 f"sitecode: {apk_parser.site_code}"
