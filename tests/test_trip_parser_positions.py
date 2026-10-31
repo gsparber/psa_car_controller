@@ -174,14 +174,15 @@ class DriveInGapTest(TripParserTestCase):
                                               (self.GAP_END + 8 * HOUR, 1030, 70)))
 
     def test_too_slow_to_be_a_drive(self):
-        # a few km with no position for days stay a stop, like every pair is_low_speed sees
+        # up to 1 km with no position for hours stays a stop, see test_estimated_trips for more km
         self.assertEqual([30], self.distances(*self.FIRST_DRIVE, (self.GAP_END, 1031, 72),
                                               (self.GAP_END + 8 * HOUR, 1031, 72)))
 
     def test_charged_in_the_gap(self):
-        self.assertEqual([30, 20], self.distances(*self.FIRST_DRIVE, (self.GAP_END, 1060, 85),
-                                                  (self.GAP_END + 20 * MIN, 1080, 75),
-                                                  (self.GAP_END + 12 * HOUR, 1080, 75)))
+        # T85: the km were driven, a charge on the way only hides the consumption
+        self.assertEqual([30, 30, 20], self.distances(*self.FIRST_DRIVE, (self.GAP_END, 1060, 85),
+                                                      (self.GAP_END + 20 * MIN, 1080, 75),
+                                                      (self.GAP_END + 12 * HOUR, 1080, 75)))
         self.assertEqual([(72, 85)], [(charge["start_level"], charge["end_level"])
                                       for charge in Charging.get_estimated_chargings(CARS)])
 

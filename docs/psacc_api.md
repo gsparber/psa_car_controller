@@ -78,13 +78,22 @@ These links will work only if PSACC is on your computer, if it isn't please repl
    http://localhost:5000/vehicles/chargings/estimated
 
    Same fields with `"estimated": true`, but `start_at`/`stop_at` only frame the charge (end of the trip before,
-   start of the trip after), and `kw`, `price`, `co2` and `charging_mode` are `null` because they aren't known.
+   start of the trip after, or the dates of an estimated trip it happened in), and `kw`, `price`, `co2` and `charging_mode` are `null` because they aren't known.
    Gaps over 72 h are ignored, and so are rises of 2 % or less (more than 5 % if the car moved in between), which
    regeneration or temperature can cause. They count in no total and have no charge curve.
 
 17. Get the vehicle trips:
    
    http://localhost:5000/vehicles/trips
+
+   Each trip has `"estimated": false`, or `"estimated": true` for a drive only known from two positions more than
+   2 h apart: the mileage rose by more than 1 km, or by at least 0.2 km/h. A charge or a refuel on the way doesn't
+   change that. All fields stay, with these differences:
+   - `start_at`/`end_at` only frame the drive, and `positions` only holds its end.
+   - `duration` and `speed_average` are `null`, the drive took an unknown part of that time.
+   - `consumption`, `consumption_km` and `consumption_fuel_km` are `null` when no level fell. When one fell they
+     come from the levels at both ends, a charge on the way would make them too low.
+   - `distance` and `mileage` are as for any other trip.
 
 18. Status of the remote commands
 
@@ -120,17 +129,16 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
     ```json
     {"maintenance": {"mileage": 12000, "days": 150, "updated_at": "2026-10-29T08:00:00Z"},
-     "commands": {"/VehCharge": true, "/VehCharge/state": true, "/ThermalPrecond": true, "/Doors": false,
-                  "/Horn": false, "/Lights": false},
-     "rights": {"RCC": {"name": "Remote charge", "mqtt_services": ["VehCharge"]}},
+     "rights": {"NBM01": {"name": "Contrôle de la charge", "mqtt_services": ["RemoteServices", "ServiceManagement"]}},
      "privacy": "None"}
     ```
 
-    Maintenance (from the `maintenance` link of the car list) and rights (remote services the subscription covers)
-    are asked for with the first status refresh, then once a day, not while PSA rate limits the account. `null`
-    while unknown, or when the account doesn't offer them (then they aren't asked for again until a restart).
-    `commands` is `null` when the rights don't name any known command; the web UI hides only the commands set to
-    `false`. `privacy` is the car's private mode (`None`, `Geolocation`, `Full`: position and live data paused).
+    Maintenance (from the `maintenance` link of the car list) and rights (services the API lists for the car, as it
+    sends them) are asked for with the first status refresh, then once a day, not while PSA rate limits the account.
+    `null` while unknown, or when the account doesn't offer them (then they aren't asked for again until a restart).
+    `rights` is for information only: which code a command needs isn't known, so no command or button depends on it.
+    A command the car doesn't cover is answered with `not_compatible` (see the command status above).
+    `privacy` is the car's private mode (`None`, `Geolocation`, `Full`: position and live data paused).
     Not verified with a real account: the format of the rights and maintenance answers.
 
 20. Trips as Stellantis records them

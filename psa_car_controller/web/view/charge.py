@@ -12,7 +12,7 @@ from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    command_supported, is_charging, is_pending, not_in_subscription, read, remote_hint, remote_ready
+    is_charging, is_pending, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -48,21 +48,21 @@ def _status(car, pending):
     remote = remote_ready()
     return html.Div([
         html.Div([
-            html.Div([html.Span(ui.with_unit(elec.level, "%"), className="stat-value"),
+            html.Div([html.Span(ui.percent(elec.level), className="stat-value"),
                       html.Span(ui.distance(elec.autonomy, units.current()), className="ms-2 text-body-secondary")]),
             html.Div([text, " · ", *ui.power(power)] if power else [text], className="charging-line"),
         ]),
-        *([action_button("charge", car.vin, label, color="danger" if charging_now else "primary",
-                         className="w-100 mt-3 big-button", disabled=waiting or not remote), remote_hint(remote)]
-          if command_supported(car.vin, "/VehCharge") else [not_in_subscription()]),
+        action_button("charge", car.vin, label, color="danger" if charging_now else "primary",
+                      className="w-100 mt-3 big-button", disabled=waiting or not remote),
+        remote_hint(remote),
     ], className="card-block")
 
 
 def _settings(car):
     chc = read(lambda: app().chc.get(car.vin))
     if chc is None:
-        return dbc.Alert(["Automatic stop needs charge control: start PSACC with ", html.Code("-c"),
-                          " (", html.Code("--charge-control"), ")."], color="secondary")
+        return dbc.Alert(["Automatic stop needs charge control: start PSACC with ", ui.flag("-c"),
+                          " (", ui.flag("--charge-control"), ")."], color="secondary")
     stop = chc.get_stop_hour()
     has_stop = bool(stop) and any(stop)
     enabled = chc.percentage_threshold < 100 or has_stop
@@ -73,7 +73,7 @@ def _settings(car):
             html.Small(id=SAVED, className="save-status ms-auto"),
         ], className="d-flex align-items-center"),
         dbc.Collapse(html.Div([
-            html.Label(["Battery limit ", html.Strong(id=LIMIT_VALUE, children=f"{limit} %")], htmlFor=LIMIT),
+            html.Label(["Battery limit ", html.Strong(id=LIMIT_VALUE, children=ui.percent(limit))], htmlFor=LIMIT),
             dcc.Slider(id=LIMIT, min=50, max=100, step=5, value=limit, marks={v: f"{v}" for v in range(50, 101, 10)},
                        allow_direct_input=False, className="mb-3"),
             html.Label("Stop at (optional)", htmlFor=STOP_TIME),
@@ -99,7 +99,7 @@ def _charge_row(charge, currency):
     else:
         length = "in progress"
     when = [ui.local_datetime(charge["start_at"]), f" · {length}"]
-    levels = [ui.fmt(charge['start_level']), " → ", ui.fmt(charge['end_level']), " %"]
+    levels = [ui.fmt(charge['start_level']), " → ", ui.percent(charge['end_level'])]
     price = ui.with_unit(charge["price"], currency, 2)
     cost = [" · ", *price] if price != "–" else []
     energy = [*ui.with_unit(charge['kw'], "kWh", 1), *cost]
@@ -115,7 +115,7 @@ def _estimated_charge_row(charge):
     """Only the levels are known, and the dates frame the charge: no duration, no energy, no cost."""
     return html.Div([
         html.I(className="bi bi-battery-half me-3"),
-        html.Div([html.Div([ui.fmt(charge['start_level']), " → ", ui.fmt(charge['end_level']), " %"],
+        html.Div([html.Div([ui.fmt(charge['start_level']), " → ", ui.percent(charge['end_level'])],
                            className="fw-semibold"),
                   html.Small(["Between ", ui.local_datetime(charge["start_at"]), " and ",
                               ui.local_datetime(charge["stop_at"])], className="text-body-secondary")],
@@ -188,7 +188,7 @@ def show_recent(vin):
 @dash_app.callback(Output(AUTO_FIELDS, "is_open"), Output(LIMIT_VALUE, "children"),
                    Input(AUTO_SWITCH, "value"), Input(LIMIT, "value"))
 def show_limit(enabled, limit):
-    return bool(enabled), f"{limit} %"
+    return bool(enabled), ui.percent(limit)
 
 
 @dash_app.callback(Output(STOP_TIME, "value"), Input(CLEAR_TIME, "n_clicks"), prevent_initial_call=True)

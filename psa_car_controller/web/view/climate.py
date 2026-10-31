@@ -11,7 +11,7 @@ from psa_car_controller.web.app import dash_app
 from psa_car_controller.psa import precond_programs
 from psa_car_controller.web.view import status_text, ui
 from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    command_supported, is_pending, is_preconditioning, not_in_subscription, read, remote_hint, remote_ready
+    is_pending, is_preconditioning, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +45,9 @@ def _status(car, pending):
         html.Div([html.I(className="bi bi-snow me-2"), "Climate ", html.Strong(state)], className="fs-5"),
         html.Small(f"Last failure: {status_text.precond_failure_text(failure)}",
                    className="text-danger") if failure else None,
-        *([action_button("precond", car.vin, label, color="secondary" if precond_on else "primary",
-                         className="w-100 mt-3 big-button", disabled=waiting or not remote), remote_hint(remote)]
-          if command_supported(car.vin, "/ThermalPrecond") else [not_in_subscription()]),
+        action_button("precond", car.vin, label, color="secondary" if precond_on else "primary",
+                      className="w-100 mt-3 big-button", disabled=waiting or not remote),
+        remote_hint(remote),
     ], className="card-block")
 
 
@@ -101,7 +101,7 @@ def _programs(car):
                      id=ADD_WRAP, hidden=all(visible)),
             dbc.Button("Save schedules", id=SAVE, color="primary", className="w-100 big-button", n_clicks=0,
                        disabled=not remote),
-            remote_hint(remote) if command_supported(car.vin, "/ThermalPrecond") else None]
+            remote_hint(remote)]
 
 
 def get_climate_layout():

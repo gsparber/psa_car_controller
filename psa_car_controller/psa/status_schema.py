@@ -32,7 +32,7 @@ _raw_status_logged = set()
 
 
 def enable_raw_status_log(enabled: bool = True):
-    """Log the raw status of each vehicle once, to check which schema the API sends."""
+    """Log the raw status and rights of each vehicle once, to check what the API sends."""
     global _raw_status_log_enabled  # pylint: disable=global-statement
     with _raw_status_log_lock:
         _raw_status_log_enabled = enabled
@@ -57,6 +57,23 @@ def log_raw_status(data: dict):
         _raw_status_logged.add(vehicle)
     logger.info("Raw vehicle status (position and ids hidden, logged once per vehicle): %s",
                 json.dumps(_redact(data), sort_keys=True, default=str))
+
+
+def log_raw_rights(vin, data: dict):
+    """Log the rights answer of each vehicle once, to learn which service code goes with which command."""
+    if not data:
+        return
+    with _raw_status_log_lock:
+        if not _raw_status_log_enabled or ("rights", vin) in _raw_status_logged:
+            return
+        _raw_status_logged.add(("rights", vin))
+    redacted = _redact(data)
+    units = redacted.get("services")
+    if isinstance(units, dict):
+        # its services are grouped under the serial number of each telematic unit
+        redacted["services"] = {f"unit{number}": services for number, services in enumerate(units.values(), 1)}
+    logger.info("Raw vehicle rights (ids hidden, logged once per vehicle): %s",
+                json.dumps(redacted, sort_keys=True, default=str))
 
 
 def _energy_from_energies(energy: dict) -> Optional[dict]:

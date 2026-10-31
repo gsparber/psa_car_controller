@@ -99,3 +99,15 @@ Check the log before sharing it in an issue, and remove the option afterwards.
 The charge limit of PSACC (`-c`) doesn't come from the API: PSACC stops the charge itself when the car reaches
 the limit, using the delayed charge of the car, so the car needs to be reachable to stop
 (see [#912](https://github.com/flobz/psa_car_controller/issues/912), [#1209](https://github.com/flobz/psa_car_controller/issues/1209)).
+### 12. Which commands does my subscription cover? Help us find out
+PSACC shows every command, and a command the car doesn't cover ends with `Not supported by this car`. The API lists
+the services of a car (`/vehicle_services/YOURVIN`, field `rights`), but which service code a command needs is not
+documented. Names like `Horn & Light` are only a hint, and no public report yet shows a refused command together with
+the rights of the same car. So PSACC doesn't hide a command because of a missing code.
+
+To help, start PSACC once with `--log-raw-status` (Docker: add it to `PSACC_OPTIONS`) and open an issue with:
+- the log line `Raw vehicle rights`: VIN and ids are hidden, the serial numbers of the telematic units become `unit1`, `unit2`
+- brand, model, year, and the services the brand app shows for the car (e-remote control, Connect Plus...)
+- for each command you tried (charge, climate, horn, lights, doors): whether it worked or said `Not supported by this car`
+
+A car that refuses a command is the most useful report. Check the log before sharing it, and remove the option afterwards.

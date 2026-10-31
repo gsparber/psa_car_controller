@@ -11,3 +11,9 @@ div.export-load-anim .dash-loading-spinner {
 .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner tr:hover > td:not(.focused) {
   background-image: linear-gradient(#ffeb3b75 0 0);
 }
+
+/* dash-table keeps its tooltip inside the window but for 2 px, whatever its width or margin: without this the page
+   scrolls sideways while one is open. The 2 px are border and padding, the text stays whole */
+#react-entry-point:has(.dash-tooltip) {
+  overflow-x: clip;
+}

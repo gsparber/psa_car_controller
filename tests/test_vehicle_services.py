@@ -2,6 +2,8 @@
 
 The answers are mocked after the format the Home Assistant integration reads, no real account was at hand.
 """
+import json
+import logging
 import re
 import unittest
 from datetime import datetime, timezone
@@ -10,10 +12,11 @@ from unittest.mock import MagicMock, patch
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psa.extra_api import API_ROOT, ExtraApi, page_token
+from psa_car_controller.psa.status_schema import enable_raw_status_log
 from psa_car_controller.psacc.application import psa_client as psa_client_module
 from psa_car_controller.psacc.application.psa_client import PSAClient
 from psa_car_controller.psacc.application.vehicle_services import REFRESH_PERIOD, RETRY_DELAY, VehicleServices, \
-    parse_rights, supported_commands
+    parse_rights
 from psa_car_controller.psacc.model.car import Car, Cars
 from psa_car_controller.web.view import status_text, ui
 from tests.test_units import service_text
@@ -23,10 +26,14 @@ from tests.utils import get_web_view
 DATE = "2022-03-26T11:02:54Z"
 MAINTENANCE_HREF = API_ROOT + "/connectedcar/v4/user/vehicles/vehicle-id/maintenance?locale=fr-FR"
 MAINTENANCE = {"mileageBeforeMaintenance": 12000, "daysBeforeMaintenance": 150, "updatedAt": DATE}
-RIGHTS = {"services": {
-    "BSRF": [{"code": "RCC", "name": "Remote charge", "mqtt_services": ["VehCharge"]},
-             {"code": "RTP", "name": "Remote climate", "mqtt_services": ["/ThermalPrecond"]}],
-    "VSM": [{"code": "RCC", "name": "Remote charge", "mqtt_services": ["VehCharge"]}],
+# as the API sends them, with made up serial numbers: mqtt_services name domains, preconditioning has no RemoteServices
+RIGHTS = {"vin": VIN, "services": {
+    "0123456789ABCDEF0123": [{"code": "NBM01", "name": "Contrôle de la charge", "operators": ["PSA"],
+                              "mqtt_services": ["RemoteServices", "ServiceManagement"]},
+                             {"code": "NAS01", "name": "Contrôle préconditionnement thermique", "operators": ["PSA"],
+                              "mqtt_services": ["DeviceManagement", "ServiceManagement"]}],
+    "FEDCBA98765432100123": [{"code": "NBM01", "name": "Contrôle de la charge", "operators": ["PSA"],
+                              "mqtt_services": ["RemoteServices", "ServiceManagement"]}],
 }}
 
 
@@ -106,8 +113,8 @@ class TestRights(unittest.TestCase):
 
     def test_services_of_every_unit_once(self):
         features = parse_rights(RIGHTS)
-        self.assertEqual(["RCC", "RTP"], sorted(features))
-        self.assertEqual(["VehCharge"], features["RCC"]["mqtt_services"])
+        self.assertEqual(["NAS01", "NBM01"], sorted(features))
+        self.assertEqual(["RemoteServices", "ServiceManagement"], features["NBM01"]["mqtt_services"])
 
     def test_malformed_answers(self):
         self.assertEqual({}, parse_rights(None))
@@ -116,18 +123,51 @@ class TestRights(unittest.TestCase):
                          parse_rights({"services": {"u": [None, "x", {"name": "no code"}, {"code": "A",
                                                                                          "mqtt_services": "x"}]}}))
 
-    def test_commands_covered(self):
-        commands = supported_commands(parse_rights(RIGHTS))
-        self.assertTrue(commands["/VehCharge"])
-        self.assertTrue(commands["/VehCharge/state"])  # the wakeup is a charge state request
-        self.assertTrue(commands["/ThermalPrecond"])
-        self.assertFalse(commands["/Horn"])
-        self.assertFalse(commands["/Doors"])
 
-    def test_unknown_format_hides_nothing(self):
-        self.assertIsNone(supported_commands(parse_rights(
-            {"services": {"u": [{"code": "X", "mqtt_services": ["remote:door"]}]}})))
-        self.assertIsNone(supported_commands({}))
+class TestRawRightsLog(unittest.TestCase):
+    LOGGER = "psa_car_controller.psa.status_schema"
+
+    def setUp(self):
+        self.addCleanup(enable_raw_status_log, False)
+        self.client = MagicMock()
+        self.client.call_api.return_value = RIGHTS
+        self.api = ExtraApi(self.client)
+
+    def logged(self, *vins):
+        with self.assertLogs(self.LOGGER, level=logging.DEBUG) as logs:
+            logging.getLogger(self.LOGGER).debug("start")
+            for vin in vins:
+                self.api.get_rights(vin)
+        return [record.getMessage() for record in logs.records if "Raw vehicle rights" in record.getMessage()]
+
+    def test_not_logged_by_default(self):
+        enable_raw_status_log(False)
+        self.assertEqual([], self.logged(VIN))
+
+    def test_logged_once_per_vehicle(self):
+        enable_raw_status_log()
+        self.assertEqual(2, len(self.logged(VIN, VIN, "other vin")))
+
+    def test_shows_the_services_without_ids(self):
+        enable_raw_status_log()
+        message = self.logged(VIN)[0]
+        rights = json.loads(message[message.index("{"):])
+        self.assertEqual(["unit1", "unit2"], sorted(rights["services"]))
+        self.assertEqual(RIGHTS["services"]["0123456789ABCDEF0123"], rights["services"]["unit1"])
+        for hidden in (VIN, "0123456789ABCDEF0123", "FEDCBA98765432100123"):
+            self.assertNotIn(hidden, message)
+
+    def test_empty_answer_does_not_use_up_the_log(self):
+        enable_raw_status_log()
+        self.client.call_api.return_value = {}
+        self.assertEqual([], self.logged(VIN))
+        self.client.call_api.return_value = RIGHTS
+        self.assertEqual(1, len(self.logged(VIN)))
+
+    def test_unexpected_format(self):
+        enable_raw_status_log()
+        self.client.call_api.return_value = {"services": ["NBM01"], "expires": "2030"}
+        self.assertIn('"expires"', self.logged(VIN)[0])
 
 
 class TestVehicleServices(unittest.TestCase):
@@ -173,7 +213,7 @@ class TestVehicleServices(unittest.TestCase):
         self.clock.now += 10 * REFRESH_PERIOD
         self.services.refresh(self.car)
         self.assertEqual(1, self.extra_api.get_rights.call_count)
-        self.assertTrue(self.services.is_command_supported(VIN, "/Horn"))
+        self.assertIsNone(self.services.rights(VIN))
 
     def test_server_error_is_retried_later(self):
         self.extra_api.get_maintenance.side_effect = [api_error(500), MAINTENANCE]
@@ -197,13 +237,10 @@ class TestVehicleServices(unittest.TestCase):
         self.assertTrue(self.services.refresh(self.car))
         self.assertEqual(1, self.extra_api.get_rights.call_count)
 
-    def test_commands_hidden_only_when_the_rights_are_known(self):
-        self.assertTrue(self.services.is_command_supported(VIN, "/Horn"))
+    def test_rights_are_passed_on_as_the_api_lists_them(self):
+        self.assertEqual({"maintenance": None, "rights": None}, self.services.to_dict(VIN))
         self.services.refresh(self.car)
-        self.assertFalse(self.services.is_command_supported(VIN, "/Horn"))
-        self.assertTrue(self.services.is_command_supported(VIN, "/VehCharge"))
-        self.assertTrue(self.services.is_command_supported(VIN, "/Unknown"))
-        self.assertEqual(["RCC", "RTP"], sorted(self.services.to_dict(VIN)["rights"]))
+        self.assertEqual(["NAS01", "NBM01"], sorted(self.services.to_dict(VIN)["rights"]))
 
     def test_trips_are_cached(self):
         self.extra_api.get_trips.return_value = ([{"id": 1}], False)
@@ -362,11 +399,12 @@ class TestApi(unittest.TestCase):
     def test_vehicle_services(self):
         self.myp.vehicles_list[0].status.privacy.state = "Full"
         body = self.client.get(f"/vehicle_services/{VIN}").get_json()
-        self.assertEqual({"maintenance": None, "commands": None, "rights": None, "privacy": "Full"}, body)
+        self.assertEqual({"maintenance": None, "rights": None, "privacy": "Full"}, body)
         self.myp.vehicle_services.refresh(self.myp.vehicles_list[0])
         body = self.client.get(f"/vehicle_services/{VIN}").get_json()
         self.assertEqual(12000, body["maintenance"]["mileage"])
-        self.assertFalse(body["commands"]["/Horn"])
+        self.assertEqual(["NAS01", "NBM01"], sorted(body["rights"]))
+        self.assertNotIn("commands", body)
         self.assertEqual(404, self.client.get("/vehicle_services/UNKNOWN").status_code)
 
     def test_stellantis_trips(self):
@@ -410,11 +448,16 @@ class TestHomePage(unittest.TestCase):
         self.assertNotIn("Next service", text(page))
         self.assertNotIn("Private mode", text(page))
 
-    def test_only_commands_of_the_subscription(self):
-        self.myp.extra_api.get_rights.return_value = {"services": {"u": [
-            {"code": "RTP", "mqtt_services": ["ThermalPrecond"]}]}}
-        self.myp.vehicle_services.refresh(self.car)
-        self.assertEqual(["precond"], ids(self.home.render_status(self.car)))
+    def test_rights_never_hide_a_command(self):
+        # a code missing from the rights proves nothing, whatever the answer looks like: the car refuses what it can't do
+        for answer in ({"services": {"u": [{"code": "RTP", "mqtt_services": ["ThermalPrecond"]}]}},
+                       {"services": {"u": [{"code": "NAO01", "mqtt_services": ["DataCollect"]}]}},
+                       {"services": {}}):
+            with self.subTest(answer):
+                services = VehicleServices(lambda answer=answer: MagicMock(**{"get_rights.return_value": answer}))
+                self.myp.vehicle_services = services
+                services.refresh(self.car)
+                self.assertEqual(["refresh", "charge", "precond"], ids(self.home.render_status(self.car)))
 
     def test_maintenance_and_private_mode(self):
         self.myp.vehicle_services.refresh(self.car)

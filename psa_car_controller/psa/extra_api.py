@@ -6,6 +6,7 @@ Home Assistant integration (andreadegiovine/homeassistant-stellantis-vehicles), 
 from urllib.parse import parse_qsl, urlsplit
 
 from psa_car_controller.psa.connected_car_api.api_client import ApiClient
+from psa_car_controller.psa.status_schema import log_raw_rights
 
 API_ROOT = "https://api.groupe-psa.com"
 CONNECTED_CAR_PATH = "/connectedcar/v4"
@@ -49,7 +50,9 @@ class ExtraApi:
         """Remote services the car's subscription covers: {"services": {<unit>: [{"code", "name",
         "mqtt_services"}]}}"""
         # the brand app asks for plain json on this endpoint
-        return self.get_json(RIGHTS_PATH.format(vin=vin), accept="application/json")
+        rights = self.get_json(RIGHTS_PATH.format(vin=vin), accept="application/json")
+        log_raw_rights(vin, rights)
+        return rights
 
     def get_trips_page(self, vehicle_id, since=None, token=None) -> dict:
         """One page of the trips the car recorded: {"_embedded": {"trips": [...]}, "_links": {"next": ...}}"""

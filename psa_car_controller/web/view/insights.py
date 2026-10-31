@@ -6,7 +6,7 @@ from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
 from psa_car_controller.psacc.application.charging import Charging
-from psa_car_controller.web import units
+from psa_car_controller.web import figures, units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, ui
 from psa_car_controller.web.view.car_access import app, read
@@ -35,7 +35,7 @@ def _trips(unit=units.KM):
 
 def _consumption_series(trips, period):
     x, energy = insights_data.series(trips, "consumption", period)
-    _, distance = insights_data.series(trips, "distance", period)
+    _, distance = insights_data.series(trips, "measured_distance", period)
     return x, [e / d * 100 if d else None for e, d in zip(energy, distance)]
 
 
@@ -48,7 +48,9 @@ def _chart(name, x, y, unit, local, **kwargs):
 def _trip_row(trip, unit):
     return html.Div([
         html.I(className="bi bi-geo me-3"),
-        html.Div(ui.local_datetime(trip["start_at"]), className="flex-grow-1 text-nowrap"),
+        html.Div([html.Div(ui.local_datetime(trip["start_at"]), className="text-nowrap")] + (
+            [html.Span("Estimated", className="badge text-bg-secondary", title=figures.ESTIMATED_TRIP_HINT)]
+            if trip.get("estimated") else []), className="flex-grow-1"),
         html.Div([html.Div(ui.with_unit(trip['distance'], units.distance_label(unit), 1), className="fw-semibold"),
                   html.Small(ui.with_unit(trip['consumption_km'], units.consumption_label(unit), 1),
                              className="text-body-secondary")],
@@ -79,7 +81,7 @@ def _content(period):
         content.append(ui.section("Distance", _chart("distance", x, y, units.distance_label(unit),
                                                      insights_data.local_series(trips, "distance", period))))
         x, y = _consumption_series(trips, period)
-        local = insights_data.local_series(trips, "consumption", period, divisor_key="distance")
+        local = insights_data.local_series(trips, "consumption", period, divisor_key="measured_distance")
         content.append(ui.section("Consumption", _chart("consumption", x, y, units.consumption_label(unit), local,
                                                         color="#fd7e14")))
         recent = sorted(trips, key=lambda t: t["start_at"], reverse=True)[:8]

@@ -288,6 +288,8 @@ class TestUnit(unittest.TestCase):
                      ("3008-III", None, 46, 53, 70, 30)),
                     ("VR3FPHPY0S1234567", {"label": "408 GT 1.2 Petrol", "fuel_capacity": 52},
                      ("408 GT 1.2 Petrol", None, 46, 52, 70, 30)),
+                    ("VR7ARHPYEP1234567", {"label": "C5 Aircross Hybrid E Series", "fuel_capacity": 53},
+                     ("C5 Aircross Hybrid E Series", None, 46, 53, 70, 30)),
                     ("VR3KCZKZ8R1234567", {"label": "e-5008", "abrp_name": "peugeot:e5008:25:77"},
                      ("e-5008", "peugeot:e5008:25:77", 46, 0, 70, 30)),
                     # abrp_name set by hand, as docs/abrp.md describes
@@ -372,20 +374,51 @@ class TestUnit(unittest.TestCase):
                         corrected.append(model)
                         self.assertEqual(car.battery_power, 0)
                         self.assertTrue(car.is_thermal())
-        self.assertEqual(len(corrected), 51)
-        # ElecModels aren't compared: "Vauxhall Corsa Electric" has the code of a petrol engine
-        hybrids = {engine_code(model) for model in models if model.battery_power and model.fuel_capacity}
+        self.assertEqual(len(corrected), 52)
+        with_battery = {engine_code(model) for model in models if model.battery_power}
         for model in corrected:
             with self.subTest(corrected=model.name, reg=model.reg):
                 self.assertIs(type(model), CarModel)
                 self.assertEqual(model.battery_power, 0)
                 self.assertGreater(model.fuel_capacity, 0)
                 self.assertNotRegex(model.name, "(?i)hybrid|phev|mhev|plug|tense|electric|^e-")
-                # same engine as a hybrid: a mild hybrid with wrong data, belongs in MILD_HYBRID_ENGINE_CODES
-                self.assertNotIn(engine_code(model), hybrids)
+                # same engine as a car with a battery: a mild hybrid (MILD_HYBRID_ENGINE_CODES) or wrong data
+                self.assertNotIn(engine_code(model), with_battery)
         without_battery = [model.reg for model in models if not model.battery_power]
         self.assertEqual(sorted(set(without_battery) - {model.reg for model in corrected}),
-                         ["VR3FPHPY0S", "VR3KAHPY1R"])
+                         ["VR3FPHPY0S", "VR3KAHPY1R", "VR7ARHPYEP"])
+
+    def test_car_models_with_a_wrong_powertrain(self):
+        # the 1.2 Hybrid 136 (engine code HPY) can't be charged from outside, the 13.2 kWh are from the plug-in hybrid
+        for reg, name, tank in (("VR7ARHPYEP", "C5 Aircross Hybrid E Series", 53),
+                                ("VR3KAHPY1R", "3008-III", 53),
+                                ("VR3FPHPY0S", "408 GT 1.2 Petrol", 52),
+                                # HNE is the 1.2 PureTech 100 petrol engine, was an ElecModel "Vauxhall Corsa Electric"
+                                ("VXKUPHNEKP", "Vauxhall Corsa (2023)", 44)):
+            with self.subTest(reg=reg):
+                model = CarModelRepository().find_model_by_vin(reg + "1234567")
+                self.assertIs(type(model), CarModel)
+                self.assertEqual((model.name, model.battery_power, model.fuel_capacity), (name, 0, tank))
+                self.assertIsNone(model.abrp_name)
+                car = Car(reg + "1234567", "id", "brand")
+                self.assertTrue(car.is_thermal())
+                self.assertFalse(car.is_hybrid())
+                self.assertFalse(car.has_battery())
+
+    def test_cars_json_of_a_car_model_with_a_wrong_powertrain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            # saved with the old entry: no battery anymore, the tank comes from the model, the own values stay
+            car = self._load_cars_json(path, vin="VXKUPHNEKP1234567", label="Vauxhall Corsa Electric",
+                                       abrp_name="vauxhall:corsae:20:50", max_fuel_consumption=0)
+            self.assertEqual(self._car_values(car),
+                             ("Vauxhall Corsa (2023)", "vauxhall:corsae:20:50", 0, 44, 70, 30))
+            self.assertTrue(car.is_thermal())
+            # stored values win over the model, also 13.2 kWh: as before only cars.json changes that
+            car = self._load_cars_json(path, vin="VR7ARHPYEP1234567", label="C5 Aircross Hybrid E Series",
+                                       battery_power=13.2, fuel_capacity=53)
+            self.assertEqual(self._car_values(car), ("C5 Aircross Hybrid E Series", None, 13.2, 53, 70, 30))
+            self.assertTrue(car.is_hybrid())
 
     def test_cars_json_with_another_chosen_model_is_not_changed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -542,7 +575,7 @@ class TestUnit(unittest.TestCase):
                                   'consumption_by_temp': None,
                                   'positions': {'lat': [latitude], 'long': [longitude]},
                                   'duration': 40.0, 'speed_average': 28.5, 'distance': 19.0, 'mileage': 30.0,
-                                  'altitude_diff': 2, 'id': 1, 'consumption': 4.6})
+                                  'altitude_diff': 2, 'id': 1, 'consumption': 4.6, 'estimated': False})
 
         Charging.elec_price = ConfigRepository.read_config(DATA_DIR + "config.ini").Electricity_config
         start_level = 40
@@ -621,6 +654,7 @@ class TestUnit(unittest.TestCase):
                                    'altitude_diff': 0,
                                    'id': 1,
                                    'consumption': 1.32,
+                                   'estimated': False,
                                    'consumption_fuel_km': 4.53}])
 
     def test_none_mileage(self):
@@ -650,6 +684,7 @@ class TestUnit(unittest.TestCase):
                                    'altitude_diff': 0,
                                    'id': 1,
                                    'consumption': 1.32,
+                                   'estimated': False,
                                    'consumption_fuel_km': 4.53}])
 
     def test_elec_consumption_none_level(self):

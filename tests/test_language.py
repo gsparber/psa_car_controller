@@ -25,6 +25,7 @@ from tests.utils import get_web_view
 VIEW = "psa_car_controller.web.units"
 WEB = Path(web_app.__file__).parent
 LANGUAGE_JS = WEB / "assets" / "00_language.js"
+LANGUAGE_START = "window.psaccLanguage = (function"
 CLIENTSIDE = WEB / "assets" / "clientside.js"
 LOCALES = WEB / "assets" / web_app.PLOTLY_LOCALE_DIR
 
@@ -81,16 +82,30 @@ class TestIndex(unittest.TestCase):
         self.assertIn('name="psacc-language" content="auto"', self.index())
         self.assertIn('name="psacc-language" content="de-AT"', self.index("de-AT"))
 
-    def test_only_the_language_script_is_linked(self):
+    def test_no_language_file_is_linked(self):
         page = self.index()
-        self.assertIn("00_language.js", page)
         self.assertNotIn("assets/plotly-locales/plotly-locale-", page)
         self.assertNotIn("cdn.plot.ly", page)
 
-    def test_language_script_comes_before_the_renderer(self):
+    def test_language_script_is_in_the_head_after_its_meta(self):
+        """Its file then loads along with the scripts of Dash, not after them, and nothing waits for the script."""
         page = self.index()
-        self.assertLess(page.index("00_language.js"), page.index("clientside.js"))
-        self.assertLess(page.index("00_language.js"), page.index("new DashRenderer"))
+        self.assertNotIn("00_language.js", page)
+        self.assertLess(page.index('name="psacc-language"'), page.index(LANGUAGE_START))
+        self.assertLess(page.index(LANGUAGE_START), page.index("</head>"))
+        self.assertLess(page.index(LANGUAGE_START), page.index("clientside.js"))
+        self.assertLess(page.index(LANGUAGE_START), page.index("new DashRenderer"))
+
+    def test_language_script_does_not_end_the_script_tag(self):
+        self.assertNotIn("</script", LANGUAGE_JS.read_text(encoding="utf-8").lower())
+
+    def test_language_script_is_on_the_page_once(self):
+        self.assertEqual(1, self.index().count(LANGUAGE_START))
+
+    def test_page_starts_dash_once_and_after_the_language(self):
+        page = self.index()
+        self.assertIn(web_app.RENDERER, page)
+        self.assertEqual(1, page.count("new DashRenderer"))
 
     def test_url_of_the_files_follows_the_prefix(self):
         self.assertIn('data-plotly-locales-url="/assets/plotly-locales/"', self.index())
@@ -229,21 +244,30 @@ class TestPageHelpers(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "needs node")
 class TestLanguageScript(unittest.TestCase):
     @staticmethod
-    def run_js(expression, setting="auto", browser="de-AT", ready="loading", plotly_locales="de de-ch fr no ja"):
+    def run_js(expression, setting="auto", browser="de-AT", plotly_locales="de de-ch fr no ja", before=""):
+        """added: the scripts the page got. loaded: what the browser does when a script has loaded. Waits are by hand."""
         script = f"""
-            const log = console.log; const written = []; const added = [];
+            const log = console.log; const warnings = []; const written = []; const added = []; const timers = [];
+            const listeners = new Set();
+            console.warn = text => warnings.push(text);
+            globalThis.setTimeout = run => timers.push(run);
             globalThis.window = globalThis;
             Object.defineProperty(globalThis, 'navigator', {{ value: {{ language: {json.dumps(browser)} }} }});
             globalThis.document = {{
-              readyState: {json.dumps(ready)},
               querySelector: () => ({{ content: {json.dumps(setting)},
                 dataset: {{ plotlyLocales: {json.dumps(plotly_locales)}, plotlyLocalesUrl: '/pre/assets/plotly-locales/' }} }}),
               write: text => written.push(text),
               createElement: () => ({{}}),
-              head: {{ appendChild: script => added.push(script.src) }}
+              head: {{ appendChild: script => added.push(script) }},
+              addEventListener: (type, listener, capture) => {{ if (type === 'load' && capture) listeners.add(listener) }},
+              removeEventListener: (type, listener) => listeners.delete(listener)
             }};
+            const loaded = () => [...listeners].forEach(listener => listener({{ target: {{ tagName: 'SCRIPT' }} }}));
+            const sources = () => added.map(item => item.src);
+            const settled = promise => Promise.race([promise.then(() => true), new Promise(done => setImmediate(() => done(false)))]);
+            {before}
             require('vm').runInThisContext(require('fs').readFileSync({json.dumps(str(LANGUAGE_JS))}, 'utf8'));
-            log(JSON.stringify(eval({json.dumps(expression)})));"""
+            Promise.resolve(eval({json.dumps(expression)})).then(value => log(JSON.stringify(value)));"""
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
         return json.loads(result.stdout)
 
@@ -256,40 +280,135 @@ class TestLanguageScript(unittest.TestCase):
     def test_unknown_language_is_english(self):
         for browser in ("xx-YY", "no tag at all!", ""):
             self.assertEqual("en-US", self.run_js("psaccLanguage.tag", browser=browser), browser)
-            self.assertEqual([], self.run_js("written", browser=browser), browser)
+            self.assertEqual([], self.run_js("sources()", browser=browser), browser)
+
+    def test_separators_go_with_the_name_plotly_uses(self):
+        config = self.run_js("(() => { let config; window.Plotly = { setPlotConfig: value => { config = value } }; loaded(); return config })()")
+        self.assertEqual("de", config["locale"])
+        self.assertEqual({"decimal": ",", "thousands": "\u00a0"}, config["locales"]["de"]["format"])
 
     def test_name_for_plotly(self):
         for tag, name in (("de-AT", "de"), ("de-CH", "de-CH"), ("fr-FR", "fr"), ("nb-NO", "no"), ("nn-NO", "no"),
                           ("en-US", "en-US"), ("en-GB", "en"), ("en", "en"), ("xx-YY", "en-US")):
             self.assertEqual(name, self.run_js(f"psaccLanguage.plotlyLocale('{tag}')"), tag)
 
-    def test_file_of_the_language_blocks_while_the_page_loads(self):
-        self.assertEqual(['<script src="/pre/assets/plotly-locales/plotly-locale-de.js"></script>'], self.run_js("written"))
+    def test_file_of_the_language_does_not_hold_up_the_page(self):
+        self.assertEqual(["/pre/assets/plotly-locales/plotly-locale-de.js"], self.run_js("sources()"))
+        self.assertEqual([], self.run_js("written"))
 
     def test_nothing_to_load_for_english(self):
-        self.assertEqual([], self.run_js("written", browser="en-US"))
+        self.assertEqual([], self.run_js("sources()", browser="en-US"))
+        self.assertTrue(self.run_js("settled(psaccLanguage.ready)", browser="en-US"))
 
     def test_file_is_loaded_once(self):
-        self.assertEqual(1, self.run_js("psaccLanguage.set('de-DE'); psaccLanguage.set('de-AT'); written.length"))
+        self.assertEqual(1, self.run_js("psaccLanguage.set('de-DE'); psaccLanguage.set('de-AT'); added.length"))
 
-    def test_new_choice_adds_a_script_once_the_page_is_there(self):
-        self.assertEqual(["/pre/assets/plotly-locales/plotly-locale-fr.js"],
-                         self.run_js("document.readyState = 'complete'; psaccLanguage.set('fr-FR'); added"))
+    def test_new_choice_adds_its_file(self):
+        self.assertEqual(["/pre/assets/plotly-locales/plotly-locale-de.js", "/pre/assets/plotly-locales/plotly-locale-fr.js"],
+                         self.run_js("psaccLanguage.set('fr-FR'); sources()"))
 
     def test_plotly_gets_the_language_when_it_loads_and_on_a_change(self):
         expression = """(() => {
             const calls = []; window.Plotly = { setPlotConfig: config => calls.push(config.locale) };
-            document.readyState = 'complete'; psaccLanguage.set('fr-FR'); return [calls, window.Plotly !== undefined]
+            loaded(); psaccLanguage.set('fr-FR'); return calls
         })()"""
-        self.assertEqual([["de", "fr"], True], self.run_js(expression))
+        self.assertEqual(["de", "fr"], self.run_js(expression))
+
+    def test_plotly_gets_the_language_once_from_the_loading_of_scripts(self):
+        expression = """(() => {
+            const calls = []; loaded();
+            window.Plotly = { setPlotConfig: config => calls.push(config.locale) };
+            loaded(); loaded(); return [calls, listeners.size]
+        })()"""
+        self.assertEqual([["de"], 0], self.run_js(expression))
+
+    def test_plotly_that_is_there_already_gets_the_language(self):
+        """external_scripts with the unminified plotly come before the assets."""
+        before = "globalThis.calls = []; window.Plotly = { setPlotConfig: config => calls.push(config.locale) };"
+        self.assertEqual(["de"], self.run_js("calls", before=before))
+
+    def test_page_starts_when_the_file_has_loaded(self):
+        self.assertFalse(self.run_js("settled(psaccLanguage.ready)"))
+        self.assertTrue(self.run_js("added[0].onload(); settled(psaccLanguage.ready)"))
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class TestLanguageFailure(unittest.TestCase):
+    """Whatever fails of the language of the charts: the page goes on, the charts are in English, nothing is thrown."""
+
+    run_js = staticmethod(TestLanguageScript.run_js)
+
+    def test_page_starts_without_the_file(self):
+        self.assertTrue(self.run_js("added[0].onerror(); settled(psaccLanguage.ready)"))
+
+    def test_page_does_not_wait_for_a_file_that_hangs(self):
+        self.assertEqual(1, self.run_js("timers.length"))
+        self.assertTrue(self.run_js("timers[0](); settled(psaccLanguage.ready)"))
+
+    def test_late_file_changes_nothing_else(self):
+        self.assertTrue(self.run_js("timers[0](); added[0].onload(); settled(psaccLanguage.ready)"))
+
+    def test_no_meta_tag_is_english_without_a_file(self):
+        expression = "psaccLanguage.set('fr-FR'); settled(psaccLanguage.ready).then(done => [done, sources()])"
+        self.assertEqual([True, []], self.run_js(expression, before="document.querySelector = () => null;"))
+
+    def test_plotly_never_loading_is_no_error(self):
+        self.assertEqual([None, "de-AT"], self.run_js("loaded(); [window.Plotly || null, psaccLanguage.tag]"))
+
+    def test_plotly_without_the_function(self):
+        self.assertEqual(["de-AT", []], self.run_js("window.Plotly = {}; loaded(); [psaccLanguage.tag, warnings]"))
+
+    def test_plotly_refusing_the_config(self):
+        expression = """(() => {
+            window.Plotly = { setPlotConfig: () => { throw new Error('no') } };
+            loaded(); psaccLanguage.set('fr-FR'); return [psaccLanguage.tag, warnings.length]
+        })()"""
+        self.assertEqual(["fr-FR", 2], self.run_js(expression))
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class TestRenderer(unittest.TestCase):
+    """The script at the end of the page, which starts Dash."""
+
+    @staticmethod
+    def run_js(language_script):
+        script = f"""
+            globalThis.window = globalThis; globalThis.started = 0;
+            globalThis.DashRenderer = class {{ constructor () {{ started += 1 }} }};
+            {language_script}
+            require('vm').runInThisContext({json.dumps(web_app.RENDERER)});
+            const atOnce = started;
+            setImmediate(() => {{
+              const before = started;
+              if (window.finish) window.finish();
+              setImmediate(() => console.log(JSON.stringify([atOnce, before, started, typeof renderer])));
+            }});"""
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
+        return json.loads(result.stdout)
+
+    def test_waits_for_the_language_file(self):
+        script = "window.psaccLanguage = { ready: new Promise(done => { window.finish = done }) };"
+        self.assertEqual([0, 0, 1, "object"], self.run_js(script))
+
+    def test_starts_without_the_language_script(self):
+        self.assertEqual([0, 1, 1, "object"], self.run_js(""))
+
+    def test_starts_without_the_promise(self):
+        self.assertEqual([0, 1, 1, "object"], self.run_js("window.psaccLanguage = {};"))
+
+    def test_starts_when_the_promise_fails(self):
+        self.assertEqual([0, 1, 1, "object"], self.run_js("window.psaccLanguage = { ready: Promise.reject(new Error('x')) };"))
 
 
 @unittest.skipUnless(shutil.which("node"), "needs node")
 class TestClientsideFormats(unittest.TestCase):
     @staticmethod
     def run_js(expression, language_tag):
-        script = (f"globalThis.window = {{console, psaccLanguage: {{tag: {json.dumps(language_tag)}}}}};"
-                  f"require('vm').runInThisContext(require('fs').readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
+        script = (f"globalThis.window = globalThis; globalThis.document = {{querySelector: () => null, addEventListener: () => {{}}}};"
+                  f"const vm = require('vm'), fs = require('fs');"
+                  f"vm.runInThisContext(fs.readFileSync({json.dumps(str(LANGUAGE_JS))}, 'utf8'));"
+                  f"delete globalThis.document; window.psaccLanguage.set({json.dumps(language_tag)});"
+                  f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
                   f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
         result = subprocess.run(["node", "-e", script], env={"TZ": "Europe/Vienna", "PATH": shutil.which("node").rsplit("/", 1)[0]},
                                 capture_output=True, text=True, check=True, timeout=30)
@@ -317,8 +436,8 @@ class TestClientsideFormats(unittest.TestCase):
         self.assertEqual(["6,30", "12.346"], self.run_js("[nbFormat(6.3), nbFormat(12345.6)]", "de-DE"))
 
     def test_separators_of_the_tables(self):
-        self.assertEqual({"decimal": ",", "group": "."}, self.run_js("tableLocale()", "de-DE"))
-        self.assertEqual({"decimal": ".", "group": ","}, self.run_js("tableLocale()", "en-US"))
+        self.assertEqual({"decimal": ",", "group": ".", "symbol": ["", "\u00a0%"]}, self.run_js("tableLocale()", "de-DE"))
+        self.assertEqual({"decimal": ".", "group": ",", "symbol": ["", "%"]}, self.run_js("tableLocale()", "en-US"))
 
     def test_table_date_and_slider(self):
         table = "(() => { const d = {trips: [{a: '2026-10-29T23:30:00Z'}]}; addLocaleDate(d, {trips: ['a']}); return d.trips[0].a_str })()"

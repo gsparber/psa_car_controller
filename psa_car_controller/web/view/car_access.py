@@ -33,7 +33,7 @@ COMMAND_POLL = "app-command-poll"
 COMMAND_POLL_MS = 3000
 # How long the result stays on screen
 COMMAND_SHOWN_S = 8
-REMOTE_OFF_HINT = "Started with --remote-disable or --offline."
+REMOTE_OFF_HINT = ["Started with ", ui.flag("--remote-disable"), " or ", ui.flag("--offline"), "."]
 COMMAND_LABELS = {"/VehCharge/state": "Status update", "/VehCharge": "Charge", "/ThermalPrecond": "Climate",
                   "/Doors": "Doors", "/Horn": "Horn", "/Lights": "Lights"}
 RESULTS = {SUCCESS: ("Done", "bi-check-circle-fill", "text-success"),
@@ -56,23 +56,11 @@ def remote_ready():
     return bool(app().remote_control and getattr(app().myp, "remote_client", None))
 
 
-def command_supported(vin, topic):
-    """Whether the car's subscription covers a remote command; True while its rights are unknown."""
-    services = getattr(app().myp, "vehicle_services", None)
-    return services is None or services.is_command_supported(vin, topic)
-
-
-def not_in_subscription():
-    return html.Small([html.I(className="bi bi-slash-circle me-1"), "Not included in this car's subscription"],
-                      className="d-block mt-3 text-body-secondary")
-
-
 def remote_hint(ready):
-    """Why the remote commands are locked, None when they aren't.
-    Not next to not_in_subscription(): without the right, a car with remote control on refuses the command too."""
+    """Why the remote commands are locked, None when they aren't."""
     if ready:
         return None
-    hint = "Remote control is off. " + REMOTE_OFF_HINT if not app().remote_control else \
+    hint = ["Remote control is off. ", *REMOTE_OFF_HINT] if not app().remote_control else \
         ["Remote control is not set up. ", dcc.Link("Open settings", href=dash_app.get_relative_path("/config"))]
     return html.Small(hint, className="remote-hint d-block text-body-secondary")
 

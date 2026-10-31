@@ -44,7 +44,8 @@ def parse_args():
     parser.add_argument("--web-conf", help="ignore if config files not existing yet", action='store_true')
     parser.add_argument("-b", "--base-path", help="base path for web app", default="/")
     parser.add_argument("--log-raw-status", action='store_true',
-                        help="log the raw vehicle status from the API once per vehicle (position and ids hidden)")
+                        help="log the raw vehicle status and rights from the API once per vehicle "
+                             "(position and ids hidden)")
     parser.add_argument('--version', action='version', version='PSACC {}'.format(app_version()))
 
     return parser.parse_args()

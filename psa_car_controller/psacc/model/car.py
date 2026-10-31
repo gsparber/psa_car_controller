@@ -17,8 +17,8 @@ EMPTY_STATUS_LIMIT = 3
 UNKNOWN_MODEL_VALUES = {"battery_power": DEFAULT_BATTERY_POWER, "fuel_capacity": DEFAULT_FUEL_CAPACITY,
                         "max_elec_consumption": DEFAULT_MAX_ELEC_CONSUMPTION,
                         "max_fuel_consumption": DEFAULT_MAX_FUEL_CONSUMPTION}
-# engine code in the VIN (position 6 to 8) of the 1.2 Hybrid 136: car_models.yml has 0 kWh for two of these cars,
-# but they have a 48 V battery of about 0.9 kWh
+# engine code in the VIN (position 6 to 8) of the 1.2 Hybrid 136: car_models.yml has 0 kWh for these cars because
+# their 48 V battery of about 0.9 kWh can't be charged from outside, but "has no battery" would be wrong for them
 MILD_HYBRID_ENGINE_CODES = ("HPY",)
 
 

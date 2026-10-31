@@ -95,7 +95,6 @@ class TestHomeShowsAge(unittest.TestCase):
 
     def hero(self, car):
         with patch.object(self.home, "_picture", return_value=None), \
-                patch.object(self.home, "command_supported", return_value=False), \
                 patch.object(self.home.units, "current", return_value=self.home.units.KM):
             return self.home._hero(car, True)
 

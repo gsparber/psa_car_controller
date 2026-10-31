@@ -20,6 +20,9 @@ from psa_car_controller.web.tools.utils import card_value_div, dash_date_to_date
 
 ERROR_DIV = dbc.Alert("No data to show, there is probably no trips recorded yet", color="danger")
 PADDING_TOP = {"padding-top": "1em"}
+# Only these trips have no duration. Trip.estimated doesn't reach the filter: a table cell holds no boolean to compare.
+ESTIMATED_TRIP = "{duration} is blank"
+ESTIMATED_TRIP_HINT = "Estimated: only a start and an end position are known, the drive itself wasn't recorded"
 # wide tables scroll on their own, not the whole page
 SCROLL_INSIDE_TABLE = {"overflowX": "auto"}
 consumption_fig = ERROR_DIV
@@ -67,7 +70,7 @@ def get_summary_cards():
 def get_figures(car: Car):
     global consumption_fig, trips_map, consumption_fig_by_speed, table_fig, battery_table, consumption_fig_by_temp
     # updateMap of clientside.js fills it. Plotly draws no map for a trace without entries, null shows nothing on it.
-    # No center: the whole world until there is a position. updateMap takes that as the sign to zoom in.
+    # No center: the whole world until there is a position.
     trips_map = go.Figure(go.Scattermap(
         mode="lines",
         lat=[None], lon=[None],
@@ -88,7 +91,10 @@ def get_figures(car: Car):
     speed_label = units.speed_label(UNIT)
     # Symbol.yes without a suffix would show the default symbol of the table: "$"
     mileage_format = deepcopy(nb_format).symbol_suffix(f" {dist}").precision(0)
-    level_format = deepcopy(nb_format).symbol_suffix(" %").precision(0)
+    # no suffix: the symbol of the table, which tableLocale sets to the percent sign of the language
+    level_format = deepcopy(nb_format).precision(0)
+    # a drive in a gap doesn't know these
+    unknown_nb_format = deepcopy(nb_format).nully("–")
     style_cell_conditional = []
     if car.is_electric():
         style_cell_conditional.append({'if': {'column_id': 'consumption_fuel_km', }, 'display': 'None', })
@@ -110,13 +116,13 @@ def get_figures(car: Car):
                  {'id': 'start_at_str', 'name': 'start at', 'type': 'datetime'},
                  {'id': 'end_at_str', 'name': 'end at', 'type': 'datetime'},
                  {'id': 'duration', 'name': 'duration', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(" min").precision(0)},
+                  'format': deepcopy(unknown_nb_format).symbol_suffix(" min").precision(0)},
                  {'id': 'speed_average', 'name': 'avg. speed', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(f" {speed_label}").precision(0)},
+                  'format': deepcopy(unknown_nb_format).symbol_suffix(f" {speed_label}").precision(0)},
                  {'id': 'consumption_km', 'name': 'avg. consumption', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(f" {consumption_label}")},
+                  'format': deepcopy(unknown_nb_format).symbol_suffix(f" {consumption_label}")},
                  {'id': 'consumption_fuel_km', 'name': 'average consumption fuel', 'type': 'numeric',
-                  'format': deepcopy(nb_format).symbol_suffix(f" {units.consumption_label(UNIT, 'L')}")},
+                  'format': deepcopy(unknown_nb_format).symbol_suffix(f" {units.consumption_label(UNIT, 'L')}")},
                  {'id': 'distance', 'name': 'distance', 'type': 'numeric',
                   'format': deepcopy(nb_format).symbol_suffix(f" {dist}").precision(1)},
                  {'id': 'mileage', 'name': f'mileage ({dist})', 'type': 'numeric',
@@ -132,8 +138,13 @@ def get_figures(car: Car):
             {
                 'if': {'column_id': ['altitude_diff']},
                 'color': 'black'
+            },
+            {
+                'if': {'filter_query': ESTIMATED_TRIP},
+                'fontStyle': 'italic'
             }
         ],
+        tooltip_conditional=[{'if': {'filter_query': ESTIMATED_TRIP}, 'type': 'text', 'value': ESTIMATED_TRIP_HINT}],
         style_cell_conditional=style_cell_conditional,
         data=[],
         page_size=50
@@ -156,6 +167,8 @@ def get_figures(car: Car):
     # battery_table
     battery_table = DataTable(
         id='battery-table',
+        # until tableLocale has run: without a symbol the table shows a dollar
+        locale_format={'symbol': ['', ' %']},
         export_format=EXPORT_FORMAT,
         sort_action='custom',
         style_table=SCROLL_INSIDE_TABLE,

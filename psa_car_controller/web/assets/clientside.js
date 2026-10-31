@@ -101,13 +101,30 @@ function numberText (value, digits) {
   return new Intl.NumberFormat(language(), { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value)
 }
 
-// the same for ui.fmt, which renders <data> with the number as the server writes it
+function percentText (value, digits) {
+  return new Intl.NumberFormat(language(), {
+    style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits
+  }).format(value / 100)
+}
+
+// the same for ui.fmt and ui.percent, which render <data> with the number as the server writes it
 function localizeNumbers (root) {
   Array.from(root.getElementsByClassName('local-number')).forEach(function (element) {
     const value = Number(element.getAttribute('value'))
-    const text = numberText(value, Number(element.dataset.digits))
+    const format = element.dataset.style === 'percent' ? percentText : numberText
+    const text = format(value, Number(element.dataset.digits))
     if (!isNaN(value) && element.textContent !== text) {
       element.textContent = text
+    }
+  })
+}
+
+// the same for ui.number_label: {12345} is a number
+function localizeLabels (root) {
+  Array.from(root.querySelectorAll('[data-label]')).forEach(function (element) {
+    const text = element.dataset.label.replace(/\{(-?\d+)\}/g, (_, value) => numberText(Number(value), 0))
+    if (element.getAttribute('aria-label') !== text) {
+      element.setAttribute('aria-label', text)
     }
   })
 }
@@ -115,26 +132,35 @@ function localizeNumbers (root) {
 function localizePage (root) {
   localizeTimes(root)
   localizeNumbers(root)
+  localizeLabels(root)
 }
 
 if (typeof document !== 'undefined') {
   // runs before the browser paints, for what the server sends and everything Dash adds or updates later
   new MutationObserver(() => localizePage(document)).observe(document.documentElement, {
-    childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['datetime', 'value']
+    childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['datetime', 'value', 'data-label']
   })
 }
 
 // A new choice in the settings: charts take it when they are drawn again, on the next page
 function applyLanguage (setting) { // eslint-disable-line no-unused-vars
-  window.psaccLanguage.set(setting)
+  if (window.psaccLanguage) {
+    window.psaccLanguage.set(setting)
+  }
   localizePage(document)
 }
 
-// The separators of the number columns, which the table takes in the format of d3
+// What the percent sign adds before and after the number: ['', ' %'], ['%', '']
+function percentAffixes () {
+  const parts = new Intl.NumberFormat(language(), { style: 'percent' }).formatToParts(0.8)
+  const number = parts.findIndex(item => item.type === 'integer')
+  const text = list => list.map(item => item.value).join('')
+  return [text(parts.slice(0, number)), text(parts.slice(number + 1))]
+}
+
+// The separators of the number columns, which the table takes in the format of d3, and the symbol of the level columns
 function tableLocale () { // eslint-disable-line no-unused-vars
-  const parts = new Intl.NumberFormat(language()).formatToParts(1234567.5)
-  const part = type => (parts.find(item => item.type === type) || { value: '' }).value
-  return { decimal: part('decimal'), group: part('group') }
+  return { ...(window.psaccLanguage && window.psaccLanguage.separators()), symbol: percentAffixes() }
 }
 
 function addLocaleDate (data, dateKey) {
@@ -260,14 +286,138 @@ function updateFigures (data, oldFigure, x, y) {
 }
 
 const TRIP_ZOOM = 12
+const MAP_FILL = 0.8 // of the map, the trips keep a margin
+const MAP_HEIGHT = 0.9 // of the window, see the style of trips_map
+const MAP_TILE = /\/\d+\/\d+\/\d+\.png(\?|$)/
+const EMPTY_TILE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII='
+const TILE_RESULTS = 32
+const MAP_VIEW = ['center', 'zoom', 'bearing', 'pitch']
+const MAP_ERROR = 'Map error.'
+const MAP_STOPPED = 'The map stopped working: trips and position on it may be out of date. Reload the page to try again.'
+const tileResults = []
+let mapStopped = false
 
-function updateMap (data, oldFigure, x, y, lastPos) {
+function tileProblem (url, status) {
+  const host = new URL(url).hostname
+  const osm = host.endsWith('openstreetmap.org')
+  const referer = 'OpenStreetMap refuses requests without a Referer header, which a proxy, a browser setting or an ' +
+    'extension can remove.'
+  if (status === 0) {
+    return `${host} could not be reached: offline, blocked by a firewall, or refused. ${osm ? referer : ''}`.trim()
+  }
+  if (status === 200) {
+    return `${host} answered with something that is not a tile.`
+  }
+  return `${host} answered with HTTP ${status}. ${osm && status === 403 ? referer : ''}`.trim()
+}
+
+// null without a failure among the last tiles: the hint leaves when the tiles are back
+function tilesHint (results) {
+  const failed = results.filter(result => result.problem)
+  if (failed.length === 0) {
+    return null
+  }
+  const start = failed.length === results.length ? 'No map background' : 'Parts of the map background are missing'
+  return `${start}, the trips and the position are up to date. ${failed[failed.length - 1].problem} ` +
+    'Reload the page to try again.'
+}
+
+function showMapHint () {
+  const element = document.getElementById('map-tiles-hint')
+  if (element) {
+    const text = mapStopped ? MAP_STOPPED : tilesHint(tileResults)
+    element.hidden = !text
+    element.textContent = text
+  }
+}
+
+function noteTile (problem) {
+  tileResults.push({ problem })
+  tileResults.splice(0, tileResults.length - TILE_RESULTS)
+  showMapHint()
+}
+
+// What fetchTile doesn't get: an image that can't be decoded, the style, or the map no more loading tiles with fetch.
+// Plotly then stops drawing for good, see fetchTile, and the only sign of it is this rejection of its promise.
+function noteMapError (event) {
+  if (event.reason && event.reason.message === MAP_ERROR) {
+    mapStopped = true
+    showMapHint()
+  }
+}
+
+if (window.addEventListener) {
+  window.addEventListener('unhandledrejection', noteMapError)
+}
+
+// Plotly fails a drawing on any error of the map, one missing tile is enough. The failed promise stays in gd._promises
+// and fails every later drawing too: trips, marker and hint stop following the slider. So the map gets an empty tile
+// and the page tells what is missing. An image the browser can't decode still is an error of the map.
+function fetchTile (load) {
+  return async function (input, init) {
+    const url = String(input.url || input)
+    if (!MAP_TILE.test(url)) {
+      return load(input, init)
+    }
+    let problem
+    try {
+      const response = await load(input, init)
+      if (response.ok && (response.headers.get('Content-Type') || '').startsWith('image/')) {
+        noteTile(null)
+        return response
+      }
+      problem = tileProblem(url, response.status)
+    } catch (error) {
+      if (error.name === 'AbortError') { // the map moved on, it doesn't need this tile any more
+        throw error
+      }
+      problem = tileProblem(url, 0)
+    }
+    noteTile(problem)
+    const bytes = Uint8Array.from(atob(EMPTY_TILE), char => char.charCodeAt(0))
+    return new Response(bytes, { headers: { 'Content-Type': 'image/png' } })
+  }
+}
+
+if (window.fetch) {
+  window.fetch = fetchTile(window.fetch.bind(window))
+}
+
+// Center and zoom that show all the points, plotly has no fitBounds for a map. The map is 512 pixels wide at zoom 0.
+function fitMap (points, width, height) {
+  const mercator = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360))
+  const lats = points.map(point => mercator(point.lat))
+  const lons = points.map(point => point.lon)
+  const [south, north] = [Math.min(...lats), Math.max(...lats)]
+  const [west, east] = [Math.min(...lons), Math.max(...lons)]
+  const zoomFor = (pixels, part) => Math.log2(pixels * MAP_FILL / 512 / part)
+  return {
+    center: {
+      lat: (2 * Math.atan(Math.exp((south + north) / 2)) - Math.PI / 2) * 180 / Math.PI,
+      lon: (west + east) / 2
+    },
+    zoom: Math.max(0, Math.min(TRIP_ZOOM, zoomFor(width, (east - west) / 360), zoomFor(height, (north - south) / (2 * Math.PI))))
+  }
+}
+
+// relayoutData has a view when the user moved the map. It has to be kept right away, a resize replaces it.
+function userMapView (relayoutData) { // eslint-disable-line no-unused-vars
+  if (!relayoutData || relayoutData['map.zoom'] === undefined) {
+    return dash_clientside.no_update // eslint-disable-line  no-undef
+  }
+  const view = {}
+  MAP_VIEW.forEach(key => { view[key] = relayoutData[`map.${key}`] })
+  return view
+}
+
+function updateMap (data, oldFigure, x, y, lastPos, userViews = []) {
   const trips = data.trips
   const figures = []
   let i = 0
   y.forEach(function (yLabel) {
     const xLabel = x[i]
     const figure = Object.assign({}, oldFigure[i])
+    const userView = userViews[i]
     i++
     figure.data[0].lat = []
     figure.data[0].lon = []
@@ -281,11 +431,17 @@ function updateMap (data, oldFigure, x, y, lastPos) {
     // null and not empty: plotly drops the map when no trace has an entry
     figure.data[1].lat = [lastPos ? lastPos.lat : null]
     figure.data[1].lon = [lastPos ? lastPos.lon : null]
-    if (lastPos) {
-      if (!figure.layout.map.center) {
-        figure.layout.map.zoom = TRIP_ZOOM
-      }
-      figure.layout.map.center = { lat: lastPos.lat, lon: lastPos.lon }
+    if (userView) {
+      Object.assign(figure.layout.map, userView)
+    } else if (lastPos) { // nothing to show keeps the view too: the map would jump around the world with the slider
+      const points = []
+      figure.data[0].lat.forEach((lat, index) => {
+        const lon = figure.data[0].lon[index]
+        if (typeof lat === 'number' && typeof lon === 'number') {
+          points.push({ lat, lon })
+        }
+      })
+      Object.assign(figure.layout.map, fitMap(points, window.innerWidth || 800, (window.innerHeight || 600) * MAP_HEIGHT))
     }
     // a layout from before the hint, kept by the service worker, has none
     const hints = figure.layout.annotations || []
@@ -438,7 +594,7 @@ function getLastPosition (trips) {
   return null
 }
 
-function filterAndSort (data, range, figures, p, log, sort, config) { // eslint-disable-line no-unused-vars
+function filterAndSort (data, range, figures, p, log, sort, config, userViews = []) { // eslint-disable-line no-unused-vars
   if (log > 10) {
     logger.disableLogger()
   }
@@ -454,6 +610,7 @@ function filterAndSort (data, range, figures, p, log, sort, config) { // eslint-
     sortMultipleTable(sort, dataFiltered, p.table_src)
     outFigures.push(...updateTables(dataFiltered, p.table_src))
     outFigures.push(...figures.graph)
+    figures.maps.forEach((figure, index) => Object.assign(figure.layout.map, userViews[index]))
     outFigures.push(...figures.maps)
   } else {
     addLocaleDate(data, p.date_columns)
@@ -464,7 +621,7 @@ function filterAndSort (data, range, figures, p, log, sort, config) { // eslint-
     console.log('trips', dataFiltered.trips)
     console.log('longTrips', longTrips.trips.length)
     outFigures.push(...updateFigures(longTrips, figures.graph, p.graph_x_label, p.graph_y_label))
-    outFigures.push(...updateMap(dataFiltered, figures.maps, p.map_x_label, p.map_y_label, getLastPosition(dataFiltered.trips)))
+    outFigures.push(...updateMap(dataFiltered, figures.maps, p.map_x_label, p.map_y_label, getLastPosition(dataFiltered.trips), userViews))
     updateCardsValue(longTrips)
   }
   return outFigures

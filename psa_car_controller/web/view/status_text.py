@@ -33,11 +33,6 @@ def format_int(value, unit=""):
     return f"{text} {unit}".strip()
 
 
-def format_distance(km, unit=units.KM):
-    """A distance stored in km as a whole number in the display unit, e.g. "7 671 mi"."""
-    return format_int(units.distance(km, unit), units.distance_label(unit))
-
-
 def format_duration(iso):
     """An ISO 8601 duration from the car ("PT2H10M") as "2 h 10 min"; None when it's zero or unreadable."""
     try:

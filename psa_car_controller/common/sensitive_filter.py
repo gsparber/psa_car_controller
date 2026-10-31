@@ -19,6 +19,8 @@ _ID_KEY_RE = re.compile(r"""(?P<key>\\?["']id\\?["']\s*:\s*\\?["'])(?P<value>(?:
 _BEARER_RE = re.compile(r"(?P<key>Bearer\s+)(?P<value>[\w\-.~+/]+=*)", re.IGNORECASE)
 # 17 chars without I, O, Q, at least one letter and one digit
 _VIN_RE = re.compile(r"\b(?=[A-HJ-NPR-Z0-9]*[A-HJ-NPR-Z])(?=[A-HJ-NPR-Z0-9]*\d)[A-HJ-NPR-Z0-9]{17}\b")
+# the rights of a car list its services under the serial number of each telematic unit: "0D1B...": [
+_UNIT_KEY_RE = re.compile(r"""(?P<quote>\\?["'])(?P<value>[0-9A-Fa-f]{16,})(?P<end>\\?["']\s*:\s*\[)""")
 
 
 def mask_value(value: str) -> str:
@@ -110,6 +112,7 @@ class SensitiveDataFilter(logging.Filter):
         text = _mask_vehicle_ids(text)
         text = _BEARER_RE.sub(lambda m: m.group("key") + MASK, text)
         text = _VIN_RE.sub(lambda m: mask_value(m.group(0)), text)
+        text = _UNIT_KEY_RE.sub(lambda m: m.group("quote") + mask_value(m.group("value")) + m.group("end"), text)
         return text
 
     def filter(self, record: logging.LogRecord) -> bool:

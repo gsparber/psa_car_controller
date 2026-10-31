@@ -7,6 +7,7 @@ from dash import dcc, html
 from dash.dependencies import Output
 
 from psa_car_controller.web import units
+from psa_car_controller.web.view import status_text
 
 TOAST = "app-toast"
 TOAST_OUTPUTS = ("children", "header", "icon", "is_open")
@@ -79,10 +80,26 @@ def fmt(value, digits=0):
                      **{"data-digits": digits})
 
 
+def percent(value, digits=0):
+    """A percentage as the language of the browser writes it ("80%", "80 %", "%80"), clientside.js replaces text;
+    "–" when unknown."""
+    if not _known(value):
+        return "–"
+    return html.Data(f"{value:.{digits}f} %", value=str(value), className="local-number",
+                     **{"data-digits": digits, "data-style": "percent"})
+
+
 def with_unit(value, unit, digits=0):
     """fmt with a unit, "–" alone when unknown. Children of a component, not text."""
     number = fmt(value, digits)
     return [number, f" {unit}"] if number != "–" else number
+
+
+def number_label(template, *values):
+    """The props of an aria-label with whole numbers, a {} each: it can't hold fmt, so clientside.js writes it again
+    from data-label, where {12345} is a number. "–" when unknown."""
+    return {"aria-label": template.format(*[status_text.format_int(value) for value in values]),
+            "data-label": template.format(*[f"{{{round(value)}}}" if _known(value) else "–" for value in values])}
 
 
 def distance(km, unit):
@@ -113,6 +130,11 @@ def next_service(maintenance, unit=units.KM):
 
 def power(kw):
     return ["≈", fmt(kw, 1), " kW"]
+
+
+def flag(name):
+    """A command line flag, on one line: browsers break after the hyphens of "--offline"."""
+    return html.Code(name, className="text-nowrap")
 
 
 def period_chips(chip_id, periods, value):

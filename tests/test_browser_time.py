@@ -134,7 +134,7 @@ class TestClientside(unittest.TestCase):
         script = (f"globalThis.window = {{console, psaccLanguage: {{tag: {json.dumps(language)}}}}};"
                   "const vm = require('vm'); const fs = require('fs');"
                   f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
-                  f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
+                  f"Promise.resolve(eval({json.dumps(expression)})).then(res => console.log(JSON.stringify(res)))")
         result = subprocess.run(["node", "-e", script], env={**os.environ, "TZ": time_zone, "LANG": "en_US.UTF-8"},
                                 capture_output=True, text=True, check=True, timeout=30)
         return json.loads(result.stdout)

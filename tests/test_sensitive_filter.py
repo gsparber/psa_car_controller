@@ -139,6 +139,15 @@ class TestSensitiveFilter(unittest.TestCase):
         self.assertIn("'id': 'harmless-id-0001'", output)
         self.assertIn('"id": "link"', output)
 
+    def test_serial_of_a_telematic_unit_is_masked(self):
+        sensitive = SensitiveDataFilter()
+        body = b'{"vin":"x","services":{"0123456789ABCDEF0123":[{"code":"NBM01"}],"correlation":"0123456789ABCDEF"}}'
+        for text in (f"response body: {body}", str(json.loads(body))):
+            masked = sensitive.mask(text)
+            self.assertNotIn("0123456789ABCDEF0123", masked)
+            self.assertIn("NBM01", masked)
+        self.assertIn('"correlation":"0123456789ABCDEF"', sensitive.mask(body.decode()))
+
     def test_other_ids_are_kept(self):
         # GIVEN a filter without any known value
         test_logger, stream = get_logger(SensitiveDataFilter())

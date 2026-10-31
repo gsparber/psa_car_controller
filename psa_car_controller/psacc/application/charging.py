@@ -49,27 +49,39 @@ class Charging:
         """Charges the battery level between two trips of a car reveals and chargings (its recorded ones) don't cover.
 
         They have the fields of a recorded charge, but start_at and stop_at only frame the charge (end of the trip
-        before it, start of the trip after it) and what was charged, its price and its co2 aren't known: None.
+        before it, start of the trip after it, or the dates of a drive in a gap) and what was charged, its price and
+        its co2 aren't known: None.
         """
         estimated = []
-        for before, after in zip(trips, trips[1:]):
-            if before.end_level is None or after.start_level is None:
+        for start_at, stop_at, start_level, end_level, distance, mileage in Charging._level_frames(trips):
+            if start_level is None or end_level is None:
                 continue
-            start, stop = _as_utc(before.end_at), _as_utc(after.start_at)
+            start, stop = _as_utc(start_at), _as_utc(stop_at)
             if stop - start > MAX_ESTIMATED_CHARGE_GAP:
                 continue
-            # mileage is known to 0.1 km, the rest of the difference is float noise
-            distance = round(after.mileage - after.distance - before.mileage, 1)
             # same margin as for the trips: regeneration or temperature change the level by a few percent
-            if not TripParser.is_recharging(before.end_level - after.start_level, distance):
+            if not TripParser.is_recharging(start_level - end_level, distance):
                 continue
             if Charging._overlaps_charge(start, stop, chargings):
                 continue
-            estimated.append({"start_at": before.end_at, "stop_at": after.start_at, "VIN": before.car.vin,
-                              "start_level": before.end_level, "end_level": after.start_level,
-                              "mileage": before.mileage, "co2": None, "kw": None, "price": None,
+            estimated.append({"start_at": start_at, "stop_at": stop_at, "VIN": trips[0].car.vin,
+                              "start_level": start_level, "end_level": end_level,
+                              "mileage": mileage, "co2": None, "kw": None, "price": None,
                               "charging_mode": None, "estimated": True})
         return estimated
+
+    @staticmethod
+    def _level_frames(trips: Trips):
+        """Where a charge can hide: between two trips, and inside a drive in a gap, which can have both on the way."""
+        for index, trip in enumerate(trips):
+            # mileage is known to 0.1 km, the rest of the difference is float noise
+            start_mileage = round(trip.mileage - trip.distance, 1)
+            if index > 0:
+                before = trips[index - 1]
+                yield (before.end_at, trip.start_at, before.end_level, trip.start_level,
+                       round(start_mileage - before.mileage, 1), before.mileage)
+            if trip.estimated:
+                yield trip.start_at, trip.end_at, trip.start_level, trip.end_level, trip.distance, start_mileage
 
     @staticmethod
     def get_estimated_chargings(cars: Cars) -> List[dict]:

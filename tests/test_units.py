@@ -108,11 +108,6 @@ class TestUnitConversion(unittest.TestCase):
 
 
 class TestStatusTextUnits(unittest.TestCase):
-    def test_format_distance(self):
-        self.assertEqual("12\u202f345 km", status_text.format_distance(12345))
-        self.assertEqual("7\u202f671 mi", status_text.format_distance(12345, "mi"))
-        self.assertEqual("–", status_text.format_distance(None, "mi"))
-
     def test_speed(self):
         self.assertEqual("Driving · 80 km/h", status_text.car_state_text(None, True, 80))
         self.assertEqual("Driving · 50 mph", status_text.car_state_text(None, True, 80.4672, "mi"))
@@ -177,8 +172,9 @@ class TestPagesUnits(unittest.TestCase):
         figures.get_figures(Car("VR3UHZKX", "vid", "Peugeot"))
         columns = {col["id"]: col for col in figures.battery_table.columns}
         for level in ("start_level", "end_level"):
-            self.assertEqual(" %", _suffix(columns[level]))
+            self.assertNotIn("symbol", columns[level]["format"].to_plotly_json()["locale"])  # tableLocale has the sign
         self.assertEqual("$,.0f", columns["end_level"]["format"].to_plotly_json()["specifier"])
+        self.assertEqual(["", " %"], figures.battery_table.locale_format["symbol"])
 
     def test_wide_tables_scroll_inside_not_the_page(self):
         figures.get_figures(Car("VR3UHZKX", "vid", "Peugeot"))
@@ -191,9 +187,9 @@ class TestPagesUnits(unittest.TestCase):
             for column in table.columns:
                 if "format" in column:
                     # the "$" of a specifier is the locale symbol, without one the table shows a dollar
-                    fmt = column["format"].to_plotly_json()
-                    self.assertIn("symbol", fmt["locale"], f"{table.id}: {column['id']}")
-                    self.assertEqual("", fmt["locale"]["symbol"][0], f"{table.id}: {column['id']}")
+                    locale = {**(getattr(table, "locale_format", None) or {}), **column["format"].to_plotly_json()["locale"]}
+                    self.assertIn("symbol", locale, f"{table.id}: {column['id']}")
+                    self.assertEqual("", locale["symbol"][0], f"{table.id}: {column['id']}")
 
     def test_price_column_uses_the_configured_currency(self):
         views = _view("views")

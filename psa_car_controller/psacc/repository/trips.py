@@ -13,6 +13,10 @@ from psa_car_controller.psacc.repository.db import Database
 logger = CustomLogger.getLogger(__name__)
 
 MAX_SPEED = 150
+# Longer between two positions and only the mileage tells what happened in between.
+GAP_HOURS = 2
+# A slow gap needs more than this to be a drive: up to here it can be the car moved on a parking lot, or rounding.
+MIN_SLOW_GAP_KM = 1
 
 
 class Trips(list):
@@ -55,6 +59,21 @@ class Trips(list):
         speed_average = Trips.get_speed_average(distance, duration)
         return TripParser.is_low_speed(speed_average, duration) or trip_parser.is_refuel(start, end, distance)
 
+    @staticmethod
+    def is_drive_in_gap(start, end):
+        """The car drove between two positions, whatever the levels say: a charge on the way doesn't undo the km."""
+        distance = end["mileage"] - start["mileage"]
+        duration = (end["Timestamp"] - start["Timestamp"]).total_seconds() / 3600
+        speed_average = Trips.get_speed_average(distance, duration)
+        return duration > GAP_HOURS and (not TripParser.is_low_speed(speed_average, duration)
+                                         or distance > MIN_SLOW_GAP_KM)
+
+    def close_drive_in_gap(self, start, end, trip_parser: TripParser):
+        """A trip of its own, in every place a gap can show up. Its dates only frame the drive."""
+        trip = Trip()
+        trip.estimated = True
+        self.close_trip(trip, start, end, trip_parser)
+
     def close_trip(self, trip: Trip, start, end, trip_parser: TripParser):
         logger.debugv("stop trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
                       " level_fuel:{0[level_fuel]}", end, style='{')
@@ -72,6 +91,10 @@ class Trips(list):
             diff_level, diff_level_fuel = trip_parser.get_level_consumption(start, end)
             trip.set_altitude_diff(start["altitude"], end["altitude"])
             trip.car = trip_parser.car
+            if trip.estimated:
+                # A level that didn't fall says nothing here: charged or refuelled on the way, or never reported.
+                trip.consumption_known = diff_level > 0 or diff_level_fuel > 0
+                diff_level_fuel = max(diff_level_fuel, 0)
             if diff_level != 0:
                 trip.set_consumption(diff_level)  # kw
             if diff_level_fuel != 0:
@@ -117,7 +140,11 @@ class Trips(list):
                         distance = end["mileage"] - start["mileage"]
                     except TypeError:
                         logger.debug("Bad mileage value in DB")
-                    if Trips.is_restart(start, end, distance, trip_parser):
+                    # Without positions yet, end is the one right after start: nothing has looked at this pair.
+                    gap_before = start is not end and not trip.positions and Trips.is_drive_in_gap(start, end)
+                    if gap_before:
+                        trips.close_drive_in_gap(start, end, trip_parser)
+                    if gap_before or Trips.is_restart(start, end, distance, trip_parser):
                         start = end
                         trip = Trip()
                         logger.debugv("restart trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
@@ -128,13 +155,13 @@ class Trips(list):
                         speed_average = Trips.get_speed_average(distance, duration)
                         end_trip = False
                         drive_in_gap = False
-                        if trip_parser.is_refuel(end, next_point, distance) or \
-                                TripParser.is_low_speed(speed_average, duration):
-                            end_trip = True
-                        elif duration > 2:
+                        if Trips.is_drive_in_gap(end, next_point):
                             end_trip = True
                             drive_in_gap = True
                             logger.debugv("too much time detected")
+                        elif trip_parser.is_refuel(end, next_point, distance) or \
+                                TripParser.is_low_speed(speed_average, duration):
+                            end_trip = True
                         elif x == len(res) - 3:  # last record detected
                             # think if add point is needed
                             end = next_point
@@ -143,9 +170,7 @@ class Trips(list):
                         if end_trip:
                             trips.close_trip(trip, start, end, trip_parser)
                             if drive_in_gap:
-                                # Fast enough not to be a stop, so the car drove with no position but the last one.
-                                # A trip of its own: its start and duration only frame the drive.
-                                trips.close_trip(Trip(), end, next_point, trip_parser)
+                                trips.close_drive_in_gap(end, next_point, trip_parser)
                             start = next_point
                             trip = Trip()
                         else:
@@ -154,7 +179,10 @@ class Trips(list):
                 # After a restart in the last round, or with only two positions, the loop never looked at the last pair.
                 # Everywhere else it leaves with start and end on the last position.
                 distance = end["mileage"] - start["mileage"]
-                if start is not end and not Trips.is_restart(start, end, distance, trip_parser):
-                    trips.close_trip(trip, start, end, trip_parser)
+                if start is not end:
+                    if Trips.is_drive_in_gap(start, end):
+                        trips.close_drive_in_gap(start, end, trip_parser)
+                    elif not Trips.is_restart(start, end, distance, trip_parser):
+                        trips.close_trip(trip, start, end, trip_parser)
                 trips_by_vin[vin] = trips
         return trips_by_vin

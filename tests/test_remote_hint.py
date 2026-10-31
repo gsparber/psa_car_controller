@@ -17,7 +17,6 @@ from tests.utils import get_web_view
 
 OFF = "Remote control is off. Started with --remote-disable or --offline."
 NOT_SET_UP = "Remote control is not set up."
-NOT_INCLUDED = "Not included in this car's subscription"
 
 
 def has_link(component):
@@ -29,6 +28,11 @@ def has_link(component):
     return any(has_link(child) for child in children if child is not None and not isinstance(child, str))
 
 
+def shown(component):
+    """The text as the page shows it: text() puts a space around every child."""
+    return " ".join(text(component).split()).replace(" .", ".")
+
+
 class TestRemoteHint(unittest.TestCase):
 
     @classmethod
@@ -38,8 +42,7 @@ class TestRemoteHint(unittest.TestCase):
         cls.car_access = get_web_view("car_access")
 
     def tiles(self, remote_control, remote_ready):
-        with patch.object(self.car_access, "app", return_value=SimpleNamespace(remote_control=remote_control)), \
-                patch.object(self.home, "command_supported", return_value=True):
+        with patch.object(self.car_access, "app", return_value=SimpleNamespace(remote_control=remote_control)):
             return self.home._tiles(get_car(), remote_ready, None)
 
     def test_disabled_at_start_is_not_called_unset(self):
@@ -92,15 +95,13 @@ class TestLockedButtons(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def pages(self, remote_control, remote_ready, supported=True):
+    def pages(self, remote_control, remote_ready):
         """What each page shows around its button, by the label of the button."""
         state = SimpleNamespace(remote_control=remote_control)
         car = get_car()
         with patch.object(self.car_access, "app", return_value=state), \
                 patch.object(self.charge, "remote_ready", return_value=remote_ready), \
                 patch.object(self.climate, "remote_ready", return_value=remote_ready), \
-                patch.object(self.charge, "command_supported", return_value=supported), \
-                patch.object(self.climate, "command_supported", return_value=supported), \
                 patch.object(self.climate, "current_programs", return_value={
                     key: {"on": False, "hour": 0, "minute": 0, "day": [0] * 7} for key in
                     self.climate.precond_programs.KEYS}):
@@ -113,15 +114,14 @@ class TestLockedButtons(unittest.TestCase):
         for label, page in self.pages(False, False).items():
             with self.subTest(label):
                 self.assertTrue(find_button(page, label).disabled)
-                self.assertIn(OFF, text(page))
+                self.assertIn(OFF, shown(page))
                 self.assertNotIn(NOT_SET_UP, text(page))
                 self.assertFalse(has_link(page))
 
     def test_same_text_as_the_home_page(self):
         home = get_web_view("home")
-        with patch.object(self.car_access, "app", return_value=SimpleNamespace(remote_control=False)), \
-                patch.object(home, "command_supported", return_value=True):
-            self.assertIn(OFF, text(home._tiles(get_car(), False, None)))
+        with patch.object(self.car_access, "app", return_value=SimpleNamespace(remote_control=False)):
+            self.assertIn(OFF, shown(home._tiles(get_car(), False, None)))
 
     def test_not_set_up_links_to_the_settings(self):
         for label, page in self.pages(True, False).items():
@@ -136,22 +136,10 @@ class TestLockedButtons(unittest.TestCase):
                 self.assertFalse(find_button(page, label).disabled)
                 self.assertNotIn("Remote control", text(page))
 
-    def test_the_subscription_goes_first(self):
-        pages = self.pages(False, False, supported=False)
-        for label in ("Start charging", "Turn climate on"):
-            with self.subTest(label):
-                self.assertIsNone(find_button(pages[label], label))
-                self.assertIn(NOT_INCLUDED, text(pages[label]))
-                self.assertNotIn("Remote control", text(pages[label]))
-        # the line about the subscription is above the schedules, on the same page
-        self.assertTrue(find_button(pages["Save schedules"], "Save schedules").disabled)
-        self.assertNotIn("Remote control", text(pages["Save schedules"]))
-
     def test_waiting_for_the_car_is_no_lock_to_explain(self):
         car = get_car()
         pending = {car.vin: {"charge": {"at": time.time(), "target": True}}}
-        with patch.object(self.charge, "remote_ready", return_value=True), \
-                patch.object(self.charge, "command_supported", return_value=True):
+        with patch.object(self.charge, "remote_ready", return_value=True):
             page = self.charge._status(car, pending)
         self.assertNotIn("Remote control", text(page))
 

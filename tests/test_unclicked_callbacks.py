@@ -216,7 +216,6 @@ class TestHomePoll(unittest.TestCase):
         """prevent_initial_call only holds a callback back when its output comes into the page with its input."""
         home = get_web_view("home")
         with patch.object(home, "app") as app, patch.object(home, "remote_ready", return_value=True), \
-                patch.object(home, "command_supported", return_value=True), \
                 patch.object(home, "maintenance", return_value=None), \
                 patch.object(home, "_picture", return_value=None), \
                 patch.object(home.Database, "get_last_soh_by_vin", return_value=None):

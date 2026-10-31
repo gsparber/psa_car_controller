@@ -64,13 +64,29 @@ THEME_SCRIPT = """<script>(function () {
 
 # Language files of plotly: in the assets for the prefix and the service worker, but Dash must not link all of them
 PLOTLY_LOCALE_DIR = "plotly-locales"
-PLOTLY_LOCALE_FILES = r"^plotly-locale-.*\.js$"
+# Inline in <head>, see language_script, not linked with the other assets
+LANGUAGE_SCRIPT = Path(__file__).parent / "assets" / "00_language.js"
+NOT_LINKED_ASSETS = rf"^(plotly-locale-.*|{LANGUAGE_SCRIPT.stem})\.js$"
+# Dash starts once the language file of plotly is there, so the first chart has it and the file holds up nothing else.
+# Starts as well when the language script fails: the page then is in English.
+RENDERER = """var renderer;
+      (function () {
+        function start () { renderer = new DashRenderer() }
+        Promise.resolve(window.psaccLanguage && window.psaccLanguage.ready).then(start, start)
+      }())"""
 
 
 @lru_cache(maxsize=1)
 def plotly_locales():
     files = (Path(__file__).parent / "assets" / PLOTLY_LOCALE_DIR).glob("plotly-locale-*.js")
     return sorted(file.name[len("plotly-locale-"):-len(".js")] for file in files)
+
+
+@lru_cache(maxsize=1)
+def language_script():
+    """Inline, so the language file of plotly loads along with the scripts of Dash. As the last of those scripts it
+    only started when all the others were there, and Dash had to wait for it: one more round trip on a slow network."""
+    return f"<script>{LANGUAGE_SCRIPT.read_text(encoding='utf-8')}</script>"
 
 
 _request_prefixes = ContextVar("psacc_request_prefixes", default=None)
@@ -107,6 +123,7 @@ class PwaDash(Dash):
         self._setup_lock = threading.Lock()
         super().__init__(*args, **kwargs)
         self.config = RequestPrefixConfig(self.config)
+        self.renderer = RENDERER
 
     def _setup_server(self):
         # Dash marks the setup as done when it starts it: a parallel first request would run on a half-built app
@@ -121,11 +138,12 @@ class PwaDash(Dash):
             f'<link rel="icon" type="image/png" sizes="192x192" href="{self.get_asset_url("images/icon-192.png")}">',
             THEME_SCRIPT,
             self._language_meta(),
+            language_script(),
         ])
         return super().interpolate_index(**kwargs)
 
     def _language_meta(self):
-        """For assets/00_language.js. Read on every request: the setting can change while the app runs."""
+        """For language_script. Read on every request: the setting can change while the app runs."""
         return (f'<meta name="psacc-language" content="{language.current()}"'
                 f' data-plotly-locales="{" ".join(plotly_locales())}"'
                 f' data-plotly-locales-url="{escape(self.get_asset_url(PLOTLY_LOCALE_DIR + "/"))}">')
@@ -188,7 +206,7 @@ def config_flask(title, base_path, debug: bool, host, port, reloader=False,
     dash_app = PwaDash(external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
                        external_scripts=["assets/plotly-with-meta.js"] if unminified else None, title=title,
                        server=app, requests_pathname_prefix=requests_pathname_prefix,
-                       suppress_callback_exceptions=True, meta_tags=META_TAGS, assets_ignore=PLOTLY_LOCALE_FILES)
+                       suppress_callback_exceptions=True, meta_tags=META_TAGS, assets_ignore=NOT_LINKED_ASSETS)
     dash_app.enable_dev_tools(debug)
     app.wsgi_app = MyProxyFix(dash_app, base_path)
     # keep this line

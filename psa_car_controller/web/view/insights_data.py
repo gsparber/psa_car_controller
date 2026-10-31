@@ -36,10 +36,16 @@ def trip_rows(trips):
     """Trip objects (or dicts) as plain dicts with the fields the pages need."""
     rows = []
     for trip in trips or []:
-        get = trip.get if isinstance(trip, dict) else lambda key, t=trip: getattr(t, key, None)
+        # get_info and not the attributes: they hold the frame of a drive in a gap, not what is known of it
+        get = (trip if isinstance(trip, dict) else trip.get_info()).get
+        measured = _known(get("consumption"))
         rows.append({"start_at": _aware(get("start_at")), "distance": _num(get("distance")),
-                     "consumption": _num(get("consumption")), "consumption_km": get("consumption_km"),
-                     "duration": _num(get("duration")), "speed_average": get("speed_average")})
+                     "consumption": get("consumption") if measured else None,
+                     "consumption_km": get("consumption_km"),
+                     # the km of a trip with an unknown consumption must not lower the average of the others
+                     "measured_distance": _num(get("distance")) if measured else 0,
+                     "duration": get("duration"), "speed_average": get("speed_average"),
+                     "estimated": bool(get("estimated"))})
     return rows
 
 
@@ -68,10 +74,13 @@ def in_period(rows, period, now=None):
 
 
 def trip_totals(trips):
-    distance = sum(t["distance"] for t in trips)
-    energy = sum(t["consumption"] for t in trips)
-    return {"distance": distance, "count": len(trips), "energy": energy,
-            "consumption": energy / distance * 100 if distance else None}
+    measured = [t for t in trips if _known(t["consumption"])]
+    energy = sum(t["consumption"] for t in measured)
+    measured_distance = sum(t["distance"] for t in measured)
+    # nothing measured is unknown, not 0 kWh
+    return {"distance": sum(t["distance"] for t in trips), "count": len(trips),
+            "energy": energy if measured or not trips else None,
+            "consumption": energy / measured_distance * 100 if measured_distance else None}
 
 
 def charge_totals(charges):

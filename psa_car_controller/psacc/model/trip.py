@@ -37,6 +37,10 @@ class Trip:
         self.altitude_diff = None
         self.temperatures = []
         self.id = None
+        # Only a start and an end position after a long gap: duration and speed_average stay as the frame of the drive
+        # for the parser's filters and aren't shown as values, see get_info.
+        self.estimated = False
+        self.consumption_known = True
 
     def add_points(self, latitude, longitude):
         self.positions.append(Points(latitude, longitude))
@@ -83,19 +87,25 @@ class Trip:
             "end_at": self.end_at,
             "consumption_by_temp": self.get_temperature(),
             "positions": self.get_positions(),
-            "duration": self.duration * 60,
-            "speed_average": self.speed_average,
+            "duration": None if self.estimated else self.duration * 60,
+            "speed_average": None if self.estimated else self.speed_average,
             "distance": self.distance,
             "mileage": self.mileage,
             "altitude_diff": self.altitude_diff,
             "id": self.id,
             "consumption": self.consumption,
+            "estimated": self.estimated,
         }
         if self.car.has_battery():
             res["consumption_km"] = self.consumption_km
 
         if self.car.has_fuel():
             res["consumption_fuel_km"] = self.consumption_fuel_km
+
+        if not self.consumption_known:
+            for key in ("consumption", "consumption_km", "consumption_fuel_km"):
+                if key in res:
+                    res[key] = None
 
         return res
 

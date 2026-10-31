@@ -13,8 +13,8 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import status_text, ui
-from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, command_supported, \
-    get_car, is_charging, is_pending, is_preconditioning, maintenance, read, remote_hint, remote_ready
+from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
+    is_charging, is_pending, is_preconditioning, maintenance, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +31,14 @@ def _soc_ring(level, range_km, unit=units.KM):
     value = level if isinstance(level, (int, float)) else 0
     return html.Div(
         html.Div([
-            html.Div(ui.with_unit(level, "%"), className="soc-value"),
+            html.Div(ui.percent(level), className="soc-value"),
             html.Div(ui.distance(range_km, unit), className="soc-range"),
         ], className="soc-inner"),
         className="soc-ring",
         style={"--soc": value},
         role="img",
-        **{"aria-label": f"Battery {status_text.format_int(level, 'percent')}, "
-                         f"range {status_text.format_distance(range_km, unit)}"},
+        **ui.number_label(f"Battery {{}} percent, range {{}} {units.distance_label(unit)}", level,
+                          units.distance(range_km, unit)),
     )
 
 
@@ -97,8 +97,7 @@ def _hero(car: Car, remote):
     privacy = status_text.privacy_text(read(lambda: car.status.privacy.state))
     refresh = action_button("refresh", car.vin, html.I(className="bi bi-arrow-clockwise"), color="link",
                             className="ms-auto icon-button", disabled=not remote,
-                            title="Ask the car for a fresh status") \
-        if command_supported(car.vin, "/VehCharge/state") else None
+                            title="Ask the car for a fresh status")
     return html.Div([
         html.Div([
             html.Div([html.H2(car.label or car.vin, className="h5 mb-0"),
@@ -112,7 +111,7 @@ def _hero(car: Car, remote):
         html.Div([picture, ring], className="hero-visual" + (" with-picture" if picture is not None else "")),
         html.Div([html.I(className="bi bi-lightning-charge-fill me-1" if is_charging(car) else "bi bi-plug me-1"),
                   charging], className="text-center charging-line") if charging else None,
-        html.Div(["Fuel ", *ui.with_unit(fuel.level, "%"), " · ", *ui.distance(fuel.autonomy, unit)],
+        html.Div(["Fuel ", ui.percent(fuel.level), " · ", *ui.distance(fuel.autonomy, unit)],
                  className="text-center text-body-secondary") if car.is_hybrid() else None,
     ], className="home-hero")
 
@@ -125,13 +124,12 @@ def _tiles(car: Car, remote, pending):
     if failure:
         precond_label = status_text.precond_failure_text(failure)
     tiles = []
-    if car.has_battery() and command_supported(car.vin, "/VehCharge"):
+    if car.has_battery():
         tiles.append(_tile("charge", car.vin, "bi-ev-station", "Stop charging" if charging_now else "Charge now",
                            "Charging" if charging_now else "Not charging", active=charging_now,
                            pending=is_pending(pending, car.vin, "charge", charging_now), disabled=not remote))
-    if command_supported(car.vin, "/ThermalPrecond"):
-        tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
-                           pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
+    tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
+                       pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
     return html.Div([html.Div(tiles, className="home-tiles"), remote_hint(remote)])
 
 
@@ -145,16 +143,17 @@ def _info(car: Car):
     if car.has_battery():
         soh = read(lambda: Database.get_last_soh_by_vin(car.vin))
         if soh:
-            info.append(ui.info_row("bi-heart-pulse", "Battery health", ui.with_unit(soh, "%")))
+            info.append(ui.info_row("bi-heart-pulse", "Battery health", ui.percent(soh)))
         chc = read(lambda: app().chc.get(car.vin))
         if chc:
             stop = chc.get_stop_hour()
-            parts = [f"{chc.percentage_threshold} %" if chc.percentage_threshold < 100 else None,
-                     f"{stop[0]:02d}:{stop[1]:02d}" if stop and any(stop) else None]
-            limit = " · ".join(filter(None, parts)) or "Off"
+            limit = [ui.percent(chc.percentage_threshold)] if chc.percentage_threshold < 100 else []
+            if stop and any(stop):
+                limit += [" · "] if limit else []
+                limit.append(f"{stop[0]:02d}:{stop[1]:02d}")
             info.append(dcc.Link([html.I(className="bi bi-battery-full me-3"),
                                   html.Span("Automatic stop", className="flex-grow-1"),
-                                  html.Span(limit, className="text-body-secondary me-2"),
+                                  html.Span(limit or "Off", className="text-body-secondary me-2"),
                                   html.I(className="bi bi-chevron-right text-body-secondary")],
                                  href=dash_app.get_relative_path("/charge"),
                                  className="list-group-item list-group-item-action d-flex align-items-center "

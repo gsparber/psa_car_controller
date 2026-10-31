@@ -139,7 +139,7 @@ def display_page(pathname, search):
 
 
 def create_callback():  # noqa: MC0001
-    set_clientside_callback(dash_app, STATS_TABLES, STATS_GRAPHS + STATS_MAPS)
+    set_clientside_callback(dash_app, STATS_TABLES, STATS_GRAPHS + STATS_MAPS, STATS_MAPS)
 
     @dash_app.callback(Output(EMPTY_DIV, "children"),
                        [Input("battery-table", "data_timestamp")],
@@ -459,7 +459,11 @@ def _cached_or_new_layout():
                                 size="xl",
                             )
                             ]),
-                    dbc.Tab(label="Map", tab_id="map", children=[maps])
+                    dbc.Tab(label="Map", tab_id="map", children=[
+                        # fetchTile of clientside.js fills it
+                        html.Div(id="map-tiles-hint", className="alert alert-warning mb-1", role="status",
+                                 hidden=True),
+                        maps])
                 ],
                     id="tabs",
                     active_tab="summary",

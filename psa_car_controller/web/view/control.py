@@ -38,7 +38,7 @@ def get_control_tabs(config):
         buttons_row = []
         if car.status is not None:
             unit = units.current()
-            cards = OrderedDict({"Battery SOC": {"text": [card_value_div("battery_value", "%", value=ui.fmt(
+            cards = OrderedDict({"Battery SOC": {"text": [card_value_div("battery_value", "", value=ui.percent(
                                                  car.status.get_energy('Electric').level))],
                                                  "src": dash_app.get_asset_url("images/battery-charge.svg")},
                                  "Mileage": {"text": [card_value_div("mileage_value", units.distance_label(unit),
@@ -48,7 +48,7 @@ def get_control_tabs(config):
                                  })
             soh = Database.get_last_soh_by_vin(car.vin)
             if soh:
-                cards["Battery SOH"] = {"text": [card_value_div("battery_soh_value", "%", value=ui.fmt(soh))],
+                cards["Battery SOH"] = {"text": [card_value_div("battery_soh_value", "", value=ui.percent(soh))],
                                         "src": dash_app.get_asset_url("images/battery-soh.svg")}
                 cards.move_to_end("Mileage")
             el.append(dbc.Container(dbc.Row(children=create_card(cards)), fluid=True))

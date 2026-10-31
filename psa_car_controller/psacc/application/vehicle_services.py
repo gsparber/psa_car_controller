@@ -29,9 +29,6 @@ UNSUPPORTED_STATUSES = (400, 403, 404)
 TRIPS_CACHE_S = 600
 MAX_TRIPS_PAGES = 10
 
-# MQTT topics of the remote commands, as the rights list them in "mqtt_services" (format not verified)
-COMMAND_TOPICS = ("/VehCharge", "/VehCharge/state", "/ThermalPrecond", "/Doors", "/Horn", "/Lights")
-
 
 def parse_rights(response) -> dict:
     """{service code: {"name", "mqtt_services"}} of a rights answer, its services are grouped per telematic unit."""
@@ -47,26 +44,6 @@ def parse_rights(response) -> dict:
             features[service["code"]] = {"name": service.get("name"),
                                          "mqtt_services": mqtt_services if isinstance(mqtt_services, list) else []}
     return features
-
-
-def _normalize_topic(topic) -> str:
-    return "/" + str(topic).strip().strip("/").lower()
-
-
-def _covers(service: str, topic: str) -> bool:
-    # "/VehCharge" covers "/VehCharge/state" (the wakeup) as well
-    return topic == service or topic.startswith(service + "/")
-
-
-def supported_commands(features: dict) -> Optional[dict]:
-    """{command topic: covered by the subscription}, None when the rights don't name any known command.
-
-    An unknown format must not hide every button, so then nothing is hidden.
-    """
-    services = {_normalize_topic(service) for feature in features.values() for service in feature["mqtt_services"]}
-    commands = {topic: any(_covers(service, _normalize_topic(topic)) for service in services)
-                for topic in COMMAND_TOPICS}
-    return commands if any(commands.values()) else None
 
 
 def maintenance_values(response) -> Optional[dict]:
@@ -125,14 +102,9 @@ class VehicleServices:
                 return False
         if services.rights.due(now):
             if not self._lookup(car.vin, "rights", services.rights, lambda api: api.get_rights(car.vin),
-                                self._rights_value):
+                                parse_rights):
                 return False
         return True
-
-    @staticmethod
-    def _rights_value(response):
-        features = parse_rights(response)
-        return {"features": features, "commands": supported_commands(features)}
 
     def _lookup(self, vin, name, lookup: _Lookup, request, parse) -> bool:
         # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -173,20 +145,16 @@ class VehicleServices:
         return self._car(vin).maintenance.value
 
     def rights(self, vin) -> Optional[dict]:
+        """Services the API lists for the car, for information only: no command depends on them.
+
+        Which code a command needs is unknown. Neither the code names nor "mqtt_services" tell it (preconditioning
+        works without "RemoteServices"), and no report shows a car refusing a command next to its rights. Without
+        that, a missing code proves nothing, so the car decides: it answers "not compatible" to what it doesn't cover.
+        """
         return self._car(vin).rights.value
 
-    def is_command_supported(self, vin, topic) -> bool:
-        """False only when the rights are known and don't cover the command."""
-        commands = (self.rights(vin) or {}).get("commands")
-        if not commands or topic not in commands:
-            return True
-        return commands[topic]
-
     def to_dict(self, vin) -> dict:
-        rights = self.rights(vin)
-        return {"maintenance": self.maintenance(vin),
-                "commands": rights["commands"] if rights else None,
-                "rights": rights["features"] if rights else None}
+        return {"maintenance": self.maintenance(vin), "rights": self.rights(vin)}
 
     def trips(self, vehicle_id, since: Optional[datetime] = None, max_pages=MAX_TRIPS_PAGES):
         """Trips the car recorded, as Stellantis lists them: {"trips": [...], "more": bool}. Raises ApiException."""

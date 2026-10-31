@@ -96,6 +96,16 @@ class TestCallbacksExistBeforeThePage(StatsTest):
         self.assertEqual(".." + "...".join(expected) + "..", spec["output"])
         self.assertEqual("clientside-params-store", spec["state"][-1]["id"])
 
+    def test_view_of_the_user_reaches_the_filter(self):
+        layout = self.build()
+        stores = [f"{map_id}-view-store" for map_id in self.views.STATS_MAPS]
+        self.assertLessEqual(set(stores), set(ids_in(layout)))
+        spec = next(spec for spec in callbacks() if "trips-table.data" in spec["output"])
+        self.assertEqual([{"id": store_id, "property": "data"} for store_id in stores], spec["state"][:-1])
+        for map_id, store_id in zip(self.views.STATS_MAPS, stores):
+            spec = next(spec for spec in callbacks() if spec["output"] == f"{store_id}.data")
+            self.assertEqual([{"id": map_id, "property": "relayoutData"}], spec["inputs"])
+
     def test_minimum_length_follows_the_config(self):
         self.assertEqual({"minimumLength": 7}, store(self.build(), "clientside-params-store")["config"])
         self.general.minimum_trip_length = 12

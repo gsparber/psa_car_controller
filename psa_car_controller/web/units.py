@@ -11,7 +11,7 @@ _ALIASES = {"km": KM, "kms": KM, "kilometer": KM, "kilometers": KM, "kilometre":
             "mi": MI, "mile": MI, "miles": MI, "imperial": MI}
 
 # trip and charge fields (Trip.get_info / Charging.get_chargings) and how they convert
-TRIP_DISTANCE_FIELDS = ("distance", "mileage", "speed_average")
+TRIP_DISTANCE_FIELDS = ("distance", "measured_distance", "mileage", "speed_average")
 TRIP_PER_DISTANCE_FIELDS = ("consumption_km", "consumption_fuel_km")
 
 

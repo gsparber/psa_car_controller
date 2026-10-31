@@ -199,7 +199,6 @@ class TestLocalizedPages(unittest.TestCase):
         self.car.status.get_energy.return_value.level = 81
         self.car.status.get_energy.return_value.autonomy = None
         with patch.object(charge, "remote_ready", return_value=True), \
-                patch.object(charge, "command_supported", return_value=True), \
                 patch.object(charge, "is_charging", return_value=False), \
                 patch.object(charge, "is_pending", return_value=False), \
                 patch.object(charge, "read", return_value=None):
