@@ -32,7 +32,7 @@ from psa_car_controller.psacc.application.charge_control import ChargeControls
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.application.ecomix import Ecomix
 from psa_car_controller.psacc.application.psa_client import PSAClient
-from psa_car_controller.psacc.model.car import Car, Cars
+from psa_car_controller.psacc.model.car import Car, Cars, UNCERTAIN_POWERTRAIN_MODELS
 from psa_car_controller.psacc.model.car_model import CarModel, ElecModel
 from psa_car_controller.psacc.model.trip import Trip
 from psa_car_controller.psacc.repository import config_repository
@@ -235,6 +235,8 @@ class TestUnit(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cars.json")
             for model in CarModelRepository().models:
+                if model.reg == "VXKUPHNEKP":  # only warns, see test_cars_json_of_uncertain_powertrain_only_warns
+                    continue
                 with self.subTest(model=model.name, reg=model.reg):
                     vin = model.reg.ljust(17, "0")
                     car = self._load_cars_json(path, vin=vin)
@@ -374,7 +376,7 @@ class TestUnit(unittest.TestCase):
                         corrected.append(model)
                         self.assertEqual(car.battery_power, 0)
                         self.assertTrue(car.is_thermal())
-        self.assertEqual(len(corrected), 52)
+        self.assertEqual(len(corrected), 51)
         with_battery = {engine_code(model) for model in models if model.battery_power}
         for model in corrected:
             with self.subTest(corrected=model.name, reg=model.reg):
@@ -386,7 +388,7 @@ class TestUnit(unittest.TestCase):
                 self.assertNotIn(engine_code(model), with_battery)
         without_battery = [model.reg for model in models if not model.battery_power]
         self.assertEqual(sorted(set(without_battery) - {model.reg for model in corrected}),
-                         ["VR3FPHPY0S", "VR3KAHPY1R", "VR7ARHPYEP"])
+                         ["VR3FPHPY0S", "VR3KAHPY1R", "VR7ARHPYEP", "VXKUPHNEKP"])
 
     def test_car_models_with_a_wrong_powertrain(self):
         # the 1.2 Hybrid 136 (engine code HPY) can't be charged from outside, the 13.2 kWh are from the plug-in hybrid
@@ -408,17 +410,87 @@ class TestUnit(unittest.TestCase):
     def test_cars_json_of_a_car_model_with_a_wrong_powertrain(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cars.json")
-            # saved with the old entry: no battery anymore, the tank comes from the model, the own values stay
-            car = self._load_cars_json(path, vin="VXKUPHNEKP1234567", label="Vauxhall Corsa Electric",
-                                       abrp_name="vauxhall:corsae:20:50", max_fuel_consumption=0)
-            self.assertEqual(self._car_values(car),
-                             ("Vauxhall Corsa (2023)", "vauxhall:corsae:20:50", 0, 44, 70, 30))
-            self.assertTrue(car.is_thermal())
             # stored values win over the model, also 13.2 kWh: as before only cars.json changes that
             car = self._load_cars_json(path, vin="VR7ARHPYEP1234567", label="C5 Aircross Hybrid E Series",
                                        battery_power=13.2, fuel_capacity=53)
             self.assertEqual(self._car_values(car), ("C5 Aircross Hybrid E Series", None, 13.2, 53, 70, 30))
             self.assertTrue(car.is_hybrid())
+
+    def test_cars_json_of_uncertain_powertrain_only_warns(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        vin = "VXKUPHNEKP1234567"
+        name = "Vauxhall Corsa (2023)"
+        abrp_name = "vauxhall:corsae:20:50"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for stored, expected, is_electric in (
+                    # saved with the old entry, an ElecModel: no tank from the new entry, a real Corsa-e stays electric
+                    ({"label": "Vauxhall Corsa Electric", "abrp_name": abrp_name, "max_fuel_consumption": 0},
+                     (name, abrp_name, 46, 0, 70, 0), True),
+                    # exactly the unknown model, the values are the same as the ones of a Corsa-e
+                    ({}, (name, None, 46, 0, 70, 30), True),
+                    # label already replaced by a previous start
+                    ({"label": name, "abrp_name": abrp_name}, (name, abrp_name, 46, 0, 70, 30), True),
+                    ({"label": name, "fuel_capacity": 44}, (name, None, 46, 44, 70, 30), False),
+                    # other values than the defaults warn too, the question is the same
+                    ({"label": name, "fuel_capacity": 44, "max_fuel_consumption": 12},
+                     (name, None, 46, 44, 70, 12), False)):
+                with self.subTest(stored=stored):
+                    with self.assertLogs(logger_name, level="INFO") as logs:
+                        car = self._load_cars_json(path, vin=vin, **stored)
+                    self.assertEqual(self._car_values(car), expected)
+                    self.assertEqual(car.is_electric(), is_electric)
+                    self.assertEqual(car.precond_programs, {"program1": {}})
+                    self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+                    self.assertNotIn(vin, logs.output[0])
+                    self.assertIn("***" + vin[-4:], logs.output[0])
+                    # says what to check and what to do in both cases
+                    self.assertIn("petrol", logs.output[0])
+                    self.assertIn("set battery_power to 0", logs.output[0])
+                    self.assertIn('set label to "corsa-e"', logs.output[0])
+                    # next start: the same warning until the user decides, the file stays as it is
+                    with open(path, encoding="utf-8") as file:
+                        content = file.read()
+                    with self.assertLogs(logger_name, level="INFO") as logs:
+                        again = Cars.load_cars(path)[0]
+                    self.assertEqual(self._car_values(again), expected)
+                    self.assertEqual([record.levelname for record in logs.records], ["WARNING"])
+                    with open(path, encoding="utf-8") as file:
+                        self.assertEqual(file.read(), content)
+
+    def test_cars_json_of_uncertain_powertrain_after_the_user_decided(self):
+        logger_name = "psa_car_controller.psacc.model.car"
+        vin = "VXKUPHNEKP1234567"
+        name = "Vauxhall Corsa (2023)"
+        self.assertEqual(UNCERTAIN_POWERTRAIN_MODELS, {"VXKUPHNEKP": "corsa-e"})
+        model = CarModelRepository().find_model_by_name("corsa-e")
+        self.assertIs(type(model), ElecModel)
+        self.assertEqual(model.battery_power, 46)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "cars.json")
+            for stored, expected, is_electric in (
+                    # the advice of the warning for each case, whatever fuel_capacity the first starts left
+                    ({"label": "corsa-e", "max_fuel_consumption": 0},
+                     ("corsa-e", "opel:corsae:20:50", 46, 0, 70, 0), True),
+                    ({"label": "corsa-e", "fuel_capacity": 0, "abrp_name": "own"},
+                     ("corsa-e", "own", 46, 0, 70, 30), True),
+                    ({"label": name, "battery_power": 0}, (name, None, 0, 44, 70, 30), False),
+                    ({"label": name, "battery_power": 0, "fuel_capacity": 44}, (name, None, 0, 44, 70, 30), False)):
+                with self.subTest(stored=stored):
+                    with self.assertNoLogs(logger_name, level="INFO"):
+                        car = self._load_cars_json(path, vin=vin, **stored)
+                        again = Cars.load_cars(path)[0]
+                    self.assertEqual(self._car_values(car), expected)
+                    self.assertEqual(self._car_values(again), expected)
+                    self.assertEqual(car.is_electric(), is_electric)
+                    self.assertEqual(car.is_thermal(), not is_electric)
+            # a new car without saved values gets the entry of the VIN, the two with the same engine are still corrected
+            self.assertTrue(Car(vin, "id", "brand").is_thermal())
+            for sibling, label in (("VXKUPHNEKM1234567", "Vauxhall Corsa (2020)"),
+                                   ("VXKUPHNEKR1234567", "Opel Corsa Facelift (2024)")):
+                with self.subTest(sibling=sibling):
+                    car = self._load_cars_json(path, vin=sibling, label=label, fuel_capacity=44)
+                    self.assertEqual((car.battery_power, car.fuel_capacity), (0, 44))
 
     def test_cars_json_with_another_chosen_model_is_not_changed(self):
         with tempfile.TemporaryDirectory() as tmp:

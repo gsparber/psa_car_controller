@@ -20,6 +20,9 @@ UNKNOWN_MODEL_VALUES = {"battery_power": DEFAULT_BATTERY_POWER, "fuel_capacity":
 # engine code in the VIN (position 6 to 8) of the 1.2 Hybrid 136: car_models.yml has 0 kWh for these cars because
 # their 48 V battery of about 0.9 kWh can't be charged from outside, but "has no battery" would be wrong for them
 MILD_HYBRID_ENGINE_CODES = ("HPY",)
+# first ten letters of a VIN whose entry in car_models.yml is backed only by dealers and catalogues -> the model of the
+# other possible powertrain. 46 kWh is that model's real value too, so only the user can tell if it is a leftover
+UNCERTAIN_POWERTRAIN_MODELS = {"VXKUPHNEKP": "corsa-e"}
 
 
 def _is_pure_combustion(model) -> bool:
@@ -42,6 +45,15 @@ def _replace_unknown_model_values(data):
         return data
     label_is_a_model = repository.find_model_by_name(data.get("label")) is not None
     if label_is_a_model and data["label"] != model.name:  # the user has chosen another model
+        return data
+    other_model = UNCERTAIN_POWERTRAIN_MODELS.get(model.reg)
+    if other_model is not None and data.get("battery_power") == DEFAULT_BATTERY_POWER:
+        logger.warning("cars.json: %s has battery_power %s while its VIN points to %s with %s kWh, but %s kWh also fits"
+                       " %s, so nothing is changed. Please check what your car is: if it is a petrol car,"
+                       " set battery_power to 0 in cars.json; if it is electric, set label to \"%s\" in cars.json."
+                       " This warning stays until then",
+                       mask_value(data["vin"]), DEFAULT_BATTERY_POWER, model.name, model.battery_power,
+                       DEFAULT_BATTERY_POWER, other_model, other_model)
         return data
     if not label_is_a_model and not data.get("abrp_name") \
             and all(data.get(field) == value for field, value in UNKNOWN_MODEL_VALUES.items()):
@@ -99,6 +111,10 @@ class Car:
         self.fuel_capacity = fuel_capacity or model.fuel_capacity
         self.max_elec_consumption = max_elec_consumption or model.max_elec_consumption  # kwh/100Km
         self.max_fuel_consumption = max_fuel_consumption or model.max_fuel_consumption  # L/100Km
+        if model.reg in UNCERTAIN_POWERTRAIN_MODELS and battery_power == DEFAULT_BATTERY_POWER and fuel_capacity == 0:
+            # saved as an electric car and that may be right: the tank of the model would make it a hybrid for good
+            self.fuel_capacity = 0
+            self.max_fuel_consumption = max_fuel_consumption or 0
         # last preconditioning programs reported by the car, kept across restarts: a /ThermalPrecond
         # command always carries the four programs and overwrites the ones stored in the car
         self.precond_programs = precond_programs

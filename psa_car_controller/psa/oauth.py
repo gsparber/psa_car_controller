@@ -45,6 +45,10 @@ CODE_IN_TEXT = re.compile(r"""(?<![\w-])code["']?\s*[:=]\s*["']?([^"'`&\s,;}#)>]
 SHARED_TOKEN_HINT = "Is another tool running with the same token? Each tool needs its own login."
 # the error of a refresh without a stored refresh token, the library uses the same one for no session
 NO_TOKEN_ERROR = "no_token"
+# why the API can't be used right now
+AUTH_TEMPORARY, AUTH_LOGIN_REQUIRED = "temporary", "login_required"
+AUTH_TEMPORARY_MESSAGE = "Not connected to the PSA API, this is temporary and retried on its own. If this doesn't " \
+                         "stop, log in again from the config web page"
 
 
 def rejected_grant_hint(error: Optional[Exception]) -> str:
@@ -196,6 +200,14 @@ class OpenIdCredentialManager(CredentialManager):
     def rejected_grant_retry_due(self) -> bool:
         return self.needs_login and time.monotonic() - self.grant_rejected_at >= REJECTED_GRANT_RETRY_DELAY
 
+    def refresh_failure_is_temporary(self) -> bool:
+        """True if having no usable access token can be fixed by trying again, without a new login."""
+        if self.needs_login:
+            return False
+        if self.last_refresh_error is None:
+            return bool(self.refresh_token)  # PSA didn't answer yet, it has refused nothing
+        return refresh_can_recover(self.last_refresh_error)
+
     def _refresh_token(self):
         # not the library's: on any 401 it forgets the refresh token, which only a new login gives back
         if not self.refresh_token:
@@ -252,12 +264,13 @@ class OpenIdCredentialManager(CredentialManager):
         # response (RemoteDisconnected), leaving the caller with a stale
         # token that then fails every API call with 401 until the next
         # successful refresh. Retry a few times with backoff before giving up.
-        self.last_refresh_error = None
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             sent_refresh_token = self.refresh_token
             try:
                 self._refresh_token()
+                # only now: while an attempt runs, the settings page still has to know why the last one failed
+                self.last_refresh_error = None
                 logger.info("access token refreshed")
                 for refresh_callback in self.refresh_callbacks:
                     refresh_callback()

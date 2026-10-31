@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from sqlite3 import IntegrityError
 
 from typing import List
@@ -10,18 +10,14 @@ from .trip_parser import TripParser
 
 from psa_car_controller.psacc.repository.config_repository import ElectricityPriceConfig
 from psa_car_controller.psacc.repository.db import Database
-from psa_car_controller.psacc.repository.trips import Trips
+from psa_car_controller.psacc.repository.trips import MIN_SLOW_GAP_KM, Trips, as_utc
 from ..model.car import Car, Cars
 from ..model.charge import Charge
 
 logger = logging.getLogger(__name__)
 
-# over a longer gap the car may have been used without any record: the levels no longer say what happened in between
+# over a longer gap with km in it the levels no longer say what happened in between. Without km it can only be a charge
 MAX_ESTIMATED_CHARGE_GAP = timedelta(hours=72)
-
-
-def _as_utc(date):
-    return date.replace(tzinfo=timezone.utc) if date is not None and date.tzinfo is None else date
 
 
 class Charging:
@@ -36,11 +32,14 @@ class Charging:
 
     @staticmethod
     def _overlaps_charge(start, stop, chargings: List[dict]) -> bool:
-        # a charge without stop_at is still running. Touching counts: the status that ends a charge can carry the
+        # a charge without stop_at can still be running. Touching counts: the status that ends a charge can carry the
         # date of the first position of the next trip
         for charge in chargings:
-            charge_start, charge_stop = _as_utc(charge["start_at"]), _as_utc(charge["stop_at"])
-            if charge_start is not None and charge_start <= stop and (charge_stop is None or charge_stop >= start):
+            charge_start, charge_stop = as_utc(charge["start_at"]), as_utc(charge["stop_at"])
+            if charge_start is None or charge_start > stop:
+                continue
+            # one started before a trip that ended isn't running any more, nothing just ended it
+            if charge_start >= start if charge_stop is None else charge_stop >= start:
                 return True
         return False
 
@@ -56,8 +55,8 @@ class Charging:
         for start_at, stop_at, start_level, end_level, distance, mileage in Charging._level_frames(trips):
             if start_level is None or end_level is None:
                 continue
-            start, stop = _as_utc(start_at), _as_utc(stop_at)
-            if stop - start > MAX_ESTIMATED_CHARGE_GAP:
+            start, stop = as_utc(start_at), as_utc(stop_at)
+            if stop - start > MAX_ESTIMATED_CHARGE_GAP and distance > MIN_SLOW_GAP_KM:
                 continue
             # same margin as for the trips: regeneration or temperature change the level by a few percent
             if not TripParser.is_recharging(start_level - end_level, distance):
@@ -90,7 +89,7 @@ class Charging:
         estimated = []
         for vin, trips in Trips.get_trips(cars).items():
             estimated.extend(Charging.estimate_chargings(trips, [c for c in chargings if c["VIN"] == vin]))
-        return sorted(estimated, key=lambda charge: _as_utc(charge["start_at"]))
+        return sorted(estimated, key=lambda charge: as_utc(charge["start_at"]))
 
     @staticmethod
     def get_battery_curve(conn, charge, car) -> List[BatteryChargeCurve]:
@@ -127,6 +126,34 @@ class Charging:
         return not charge or charge.stop_at
 
     @staticmethod
+    def _drove_since_start(charge: Charge, mileage) -> bool:
+        # same margin as for the trips: a car moved on a parking lot, or rounding
+        return charge.mileage is not None and mileage is not None and mileage - charge.mileage > MIN_SLOW_GAP_KM
+
+    @staticmethod
+    def _close_charge(conn, charge: Charge, car, charge_date, level, latitude,
+                      # pylint: disable=too-many-positional-arguments
+                      longitude, country_code, mileage):
+        """Network inside, so not under the write lock."""
+        stop_at = charge_date
+        if Charging._drove_since_start(charge, mileage):
+            # The status came after a drive: neither its date nor its level is from this charge, the last seen ones are
+            curve = Database.get_battery_curve(conn, charge.start_at, charge_date, charge.vin)
+            if curve:
+                stop_at, level = curve[-1].date, curve[-1].level
+                if stop_at <= charge.start_at:
+                    # Only its start was seen, the table refuses such an end. The levels of the trips can reveal it.
+                    charge.stop_at = stop_at
+                    Database.delete_charge(conn, charge)
+                    return
+        charge.end_level = level
+        charge.co2 = Ecomix.get_co2_per_kw(charge.start_at, stop_at, latitude, longitude, country_code)
+        charge.kw = (level - charge.start_level) / 100 * car.battery_power
+        charge.stop_at = stop_at
+        charge.mileage = mileage
+        Charging.update_chargings(conn, charge, car)
+
+    @staticmethod
     def record_charging(car: Car, charging_status, charge_date: datetime, level, latitude,
                         # pylint: disable=too-many-locals,too-many-positional-arguments
                         longitude, country_code, charging_mode, charging_rate, autonomy, mileage):
@@ -134,6 +161,15 @@ class Charging:
         charge_date = charge_date.replace(microsecond=0)
         if charging_status == "InProgress":
             last_charge = Database.get_last_charge(car.vin)
+            if last_charge and last_charge.stop_at and as_utc(charge_date) < as_utc(last_charge.stop_at):
+                # a status that arrives late, from before that charge ended: it would start a copy of it
+                logger.debug("status older than the end of the last charge")
+                conn.close()
+                return
+            if not Charging.is_charge_ended(last_charge) and Charging._drove_since_start(last_charge, mileage):
+                # no status in between saw that charge end, this is another one
+                Charging._close_charge(conn, last_charge, car, charge_date, level, latitude, longitude, country_code,
+                                       mileage)
             with conn.write_lock:
                 if Charging.is_charge_ended(last_charge):
                     try:
@@ -166,14 +202,8 @@ class Charging:
                 logger.debug("battery table is probably empty :", exc_info=True)
                 charge_just_finished = False
             if charge_just_finished:
-                co2_per_kw = Ecomix.get_co2_per_kw(last_charge.start_at, charge_date, latitude, longitude, country_code)
-                consumption_kw = (level - last_charge.start_level) / 100 * car.battery_power
-                last_charge.end_level = level
-                last_charge.co2 = co2_per_kw
-                last_charge.kw = consumption_kw
-                last_charge.stop_at = charge_date
-                last_charge.mileage = mileage
-                Charging.update_chargings(conn, last_charge, car)
+                Charging._close_charge(conn, last_charge, car, charge_date, level, latitude, longitude, country_code,
+                                       mileage)
         conn.close()
 
     @staticmethod

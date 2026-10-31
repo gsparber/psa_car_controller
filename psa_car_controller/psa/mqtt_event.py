@@ -79,6 +79,11 @@ def rest_charging_status(status):
     return getattr(charging, "_rest_status", charging.status)
 
 
+def mqtt_charging_status(status):
+    """Charging status mqtt reported after the api one, None if mqtt doesn't know anything newer."""
+    return getattr(status.get_energy('Electric').charging, "_mqtt_status", None)
+
+
 def _electric_energy(status):
     for energy in getattr(status, "energy", None) or []:
         if energy.type == "Electric":
@@ -158,6 +163,7 @@ class VehicleEvents:
         charging = electric.charging
         hmi_state, plugged = self.last["charging"]
         charging_status = CHARGING_STATUS.get(hmi_state)
+        charging._mqtt_status = charging_status  # pylint: disable=protected-access
         if charging_status and charging_status != charging.status:
             if not hasattr(charging, "_rest_status"):
                 # the delayed wakeup of RemoteClient._fix_not_updated_api still needs to know it

@@ -85,6 +85,28 @@ class TestCardNumbers(unittest.TestCase):
                           "avg_consum_kw": "15.00", "avg_consum_price": "3.00", "elec_consum_kw": "15.00",
                           "elec_consum_price": "3.00"}, values)
 
+    def test_energy_doesnt_depend_on_the_order_of_the_rows(self):
+        # sorted by a column of the table, the first and the last row were no longer the oldest and the newest trip
+        trips = [{**TRIP, "mileage": mileage} for mileage in (1000, 1020, 1080)]
+        for rows in (trips, trips[::-1], [trips[0], trips[2], trips[1]], [trips[1], trips[0], trips[2]]):
+            values = cards({"trips": rows, "chargings": [CHARGE]})
+            self.assertEqual(("12.00", "2.40"), (values["elec_consum_kw"], values["elec_consum_price"]))
+
+    def test_charge_of_days_doesnt_lower_the_speed(self):
+        # 2 h and 20 kWh, and 216 h: its dates can't be the time it charged, whatever it charged in them
+        stale = {**CHARGE, "stop_at": "2026-11-07T10:00:00Z", "kw": 8.74, "co2": 100, "price": 4}
+        self.assertEqual("10.00", cards({"trips": [], "chargings": [CHARGE, stale]})["avg_chg_speed"])
+        self.assertEqual("–", cards({"trips": [], "chargings": [stale]})["avg_chg_speed"])
+
+    def test_long_ac_charge_counts_for_the_speed(self):
+        slow = {**CHARGE, "stop_at": "2026-10-30T19:00:00Z", "kw": 41.25}  # 33 h
+        self.assertEqual("1.25", cards({"trips": [], "chargings": [slow]})["avg_chg_speed"])
+        self.assertEqual("1.75", cards({"trips": [], "chargings": [CHARGE, slow]})["avg_chg_speed"])
+
+    def test_charge_in_progress_doesnt_change_the_speed(self):
+        running = {**CHARGE, "stop_at": None}
+        self.assertEqual("10.00", cards({"trips": [], "chargings": [CHARGE, running]})["avg_chg_speed"])
+
     def test_no_co2_is_not_zero_emission(self):
         values = cards({"trips": [TRIP], "chargings": [{**CHARGE, "co2": None}]})
         self.assertEqual("–", values["avg_emission_kw"])

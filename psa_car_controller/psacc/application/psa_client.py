@@ -21,7 +21,8 @@ from psa_car_controller.psa.AccountInformation import AccountInformation
 from psa_car_controller.psa.RemoteClient import RemoteClient
 from psa_car_controller.psa.RemoteCredentials import RemoteCredentials
 from psa_car_controller.psa.extra_api import API_ROOT, ExtraApi
-from psa_car_controller.psa.oauth import OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient
+from psa_car_controller.psa.oauth import AUTH_LOGIN_REQUIRED, AUTH_TEMPORARY, AUTH_TEMPORARY_MESSAGE, \
+    OpenIdCredentialManager, Oauth2PSACCApiConfig, OauthAPIClient
 from .ecomix import Ecomix
 from psa_car_controller.psa.constants import realm_info, AUTHORIZE_SERVICE, INPROGRESS
 
@@ -145,6 +146,12 @@ class PSAClient:
     def is_authenticated(self) -> bool:
         return bool(self.manager.access_token) and not self.manager.needs_login
 
+    def auth_problem(self) -> Optional[str]:
+        """Why the API can't be used: None if it can, else AUTH_TEMPORARY or AUTH_LOGIN_REQUIRED."""
+        if self.is_authenticated():
+            return None
+        return AUTH_TEMPORARY if self.manager.refresh_failure_is_temporary() else AUTH_LOGIN_REQUIRED
+
     def _refresh_api_token(self, rejected_access_token: str) -> bool:
         """Refresh after a 401, and hand the new token to the request that is sent again."""
         if not self.manager.refresh_token_now(rejected_access_token):
@@ -159,6 +166,8 @@ class PSAClient:
             except RateLimitException as e:
                 logger.debug("Can't retry the rejected refresh token now: %s", e)
         if not self.is_authenticated():
+            if self.auth_problem() == AUTH_TEMPORARY:
+                raise AuthenticationRequiredException(AUTH_TEMPORARY_MESSAGE)
             # don't call PSA with a token it already refused, until a new login
             raise AuthenticationRequiredException()
         self.api_config.access_token = self.manager.access_token

@@ -15,11 +15,13 @@ from unittest.mock import MagicMock, patch
 from oauth2_client.credentials_manager import OAuthError, ServiceInformation
 from requests import RequestException, Response
 
-from psa_car_controller.psa.oauth import (OpenIdCredentialManager, REJECTED_GRANT_RETRY_DELAY, refresh_can_recover,
-                                          rejected_grant_hint)
+from psa_car_controller.common.utils import AuthenticationRequiredException
+from psa_car_controller.psa.oauth import (Oauth2PSACCApiConfig, OpenIdCredentialManager, REJECTED_GRANT_RETRY_DELAY,
+                                          refresh_can_recover, rejected_grant_hint)
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.psa_client import PSAClient
 from tests.test_remote_command_api import get_api_view
+from tests.utils import get_web_view
 
 TOKEN = "stored-refresh-token"
 
@@ -213,6 +215,146 @@ class TestApiAnswer(unittest.TestCase):
             self.assertNotIn("reconnect", temporary[0].get_json()["message"])
             self.assertIn("reconnect", rejected[0].get_json()["message"])
         self.assertEqual((503, 503), (temporary[1], rejected[1]))
+
+
+class TestFailureWithoutAccessToken(unittest.TestCase):
+    """At the start there is no access token yet: a failed refresh isn't a rejected login for all that."""
+
+    @staticmethod
+    def manager_after(status=None, body=None, network_error=False):
+        manager = get_manager()
+        manager._session = None  # holds the access token
+        if network_error:
+            with patch.object(manager, "_refresh_token", side_effect=RequestException("dns not up yet")), \
+                    patch("psa_car_controller.psa.oauth.time.sleep"), \
+                    patch.object(manager, "_refresh_with_retries",
+                                 lambda: OpenIdCredentialManager._refresh_with_retries.__wrapped__(manager)):
+                manager.refresh_token_now()
+        elif status is not None:
+            refresh(manager, status, body)
+        return manager
+
+    @staticmethod
+    def client(manager) -> PSAClient:
+        client = PSAClient.__new__(PSAClient)  # bypass __init__, it does I/O
+        client.manager = manager
+        client.remote_client = None
+        client.api_config = Oauth2PSACCApiConfig()
+        return client
+
+    def temporary_managers(self):
+        return {"network": self.manager_after(network_error=True),
+                "outage": self.manager_after(503, "<html>Service unavailable</html>"),
+                "invalid_client": self.manager_after(401, {"error": "invalid_client"}),
+                "no answer yet": self.manager_after()}
+
+    def rejected_managers(self):
+        no_token = get_manager()
+        no_token._session = None
+        no_token.refresh_token = None
+        with patch.object(no_token, "_refresh_with_retries",
+                          lambda: OpenIdCredentialManager._refresh_with_retries.__wrapped__(no_token)):
+            no_token.refresh_token_now()
+        return {"invalid_grant": self.manager_after(400, {"error": "invalid_grant"}), "no token": no_token}
+
+    def settings_for(self, manager):
+        settings = get_web_view("settings")
+        controller = MagicMock(remote_control=True, is_good=False)
+        controller.myp.manager = manager
+        controller.myp.realm = "clientsB2CPeugeot"
+        controller.myp.country_code = "FR"
+        return settings, controller
+
+    def test_settings_show_a_temporary_failure_as_temporary(self):
+        for name, manager in self.temporary_managers().items():
+            with self.subTest(name):
+                settings, controller = self.settings_for(manager)
+                with patch.object(settings, "app", return_value=controller):
+                    shown = str(settings.render(settings.current_state()))
+                self.assertNotIn("Login expired", shown)
+                self.assertIn("Temporary", shown)
+                self.assertIn("retries on its own", shown)
+                # a refusal which never stops is only fixed by a login, so the way there stays
+                self.assertIn("Log in again", shown)
+
+    def test_settings_show_a_rejected_login_as_rejected(self):
+        for name, manager in self.rejected_managers().items():
+            with self.subTest(name):
+                settings, controller = self.settings_for(manager)
+                with patch.object(settings, "app", return_value=controller):
+                    self.assertEqual([settings.LOGIN_FAILED, None, None], settings.current_state())
+                    shown = str(settings.render(settings.current_state()))
+                self.assertIn("Login expired", shown)
+                self.assertNotIn("Temporary", shown)
+
+    def test_settings_stay_temporary_while_the_next_attempt_runs(self):
+        # the page polls every 10 s, and an attempt takes up to 6 s with its retries
+        manager = self.manager_after(network_error=True)
+        settings, controller = self.settings_for(manager)
+        states = []
+
+        def attempt():
+            with patch.object(settings, "app", return_value=controller):
+                states.append(str(settings.render(settings.current_state())))
+            raise RequestException("still down")
+
+        with patch.object(manager, "_refresh_token", side_effect=attempt), \
+                patch("psa_car_controller.psa.oauth.time.sleep"), \
+                patch.object(manager, "_refresh_with_retries",
+                             lambda: OpenIdCredentialManager._refresh_with_retries.__wrapped__(manager)):
+            manager.refresh_token_now()
+
+        self.assertEqual(3, len(states))
+        for shown in states:
+            self.assertNotIn("Login expired", shown)
+
+    def test_success_clears_the_last_error(self):
+        manager = self.manager_after(network_error=True)
+        refresh(manager, 200, {"access_token": "new", "refresh_token": "new-refresh"})
+        self.assertIsNone(manager.last_refresh_error)
+
+    def test_health_tells_temporary_from_rejected(self):
+        api_view = get_api_view()
+        for name, manager in self.temporary_managers().items():
+            with self.subTest(name):
+                body, status = self.health(api_view, manager)
+                self.assertEqual(200, status)
+                self.assertFalse(body["api_authenticated"])
+                self.assertEqual("temporary", body["api_auth_problem"])
+                self.assertIn("temporary", body["api_auth_message"])
+                self.assertIn("retried", body["api_auth_message"])
+        for name, manager in self.rejected_managers().items():
+            with self.subTest(name):
+                body, status = self.health(api_view, manager)
+                self.assertEqual(200, status)
+                self.assertEqual("login_required", body["api_auth_problem"])
+                self.assertIn("log in again", body["api_auth_message"])
+
+    def test_health_says_nothing_about_a_problem_when_there_is_none(self):
+        manager = get_manager()
+        body, _ = self.health(get_api_view(), manager)
+        self.assertTrue(body["api_authenticated"])
+        self.assertNotIn("api_auth_problem", body)
+        self.assertNotIn("api_auth_message", body)
+
+    def health(self, api_view, manager):
+        with api_view.app.test_request_context(), \
+                patch.object(api_view, "APP", MagicMock(myp=self.client(manager), remote_control=False)):
+            response, status = api_view.health()
+            return response.get_json(), status
+
+    def test_api_tells_temporary_from_rejected(self):
+        for name, manager in self.temporary_managers().items():
+            with self.subTest(name):
+                with self.assertRaises(AuthenticationRequiredException) as raised:
+                    self.client(manager)._check_access_token()
+                self.assertIn("temporary", str(raised.exception))
+                self.assertNotIn("please reconnect", str(raised.exception))
+        for name, manager in self.rejected_managers().items():
+            with self.subTest(name):
+                with self.assertRaises(AuthenticationRequiredException) as raised:
+                    self.client(manager)._check_access_token()
+                self.assertIn("please reconnect", str(raised.exception))
 
 
 class TestSaveConfig(unittest.TestCase):

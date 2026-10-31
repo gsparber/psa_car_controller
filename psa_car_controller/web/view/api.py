@@ -14,7 +14,7 @@ from psa_car_controller.common.utils import AuthenticationRequiredException, Rat
 from urllib3.exceptions import HTTPError
 
 from psa_car_controller.psa.RemoteClient import RemoteException
-from psa_car_controller.psa.oauth import refresh_can_recover, rejected_grant_hint
+from psa_car_controller.psa.oauth import AUTH_LOGIN_REQUIRED, refresh_can_recover, rejected_grant_hint
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.application.vehicle_services import MAX_TRIPS_PAGES, UNSUPPORTED_STATUSES
 from psa_car_controller.psacc.application.car_controller import PSACarController
@@ -91,7 +91,8 @@ def health():
     # myp is not set yet when the app waits for its first configuration (--web-conf)
     myp = getattr(APP, "myp", None)
     body, status = get_health(myp.remote_client if myp else None, APP.remote_control,
-                              get_max_mqtt_auth_failures(), myp.is_authenticated() if myp else False)
+                              get_max_mqtt_auth_failures(), myp.is_authenticated() if myp else False,
+                              myp.auth_problem() if myp else AUTH_LOGIN_REQUIRED)
     return jsonify(body), status
 
 

@@ -9,6 +9,7 @@ from time import sleep
 import pytz
 
 from psa_car_controller.psa.constants import DISCONNECTED, INPROGRESS, FINISHED, STOPPED
+from psa_car_controller.psa.mqtt_event import mqtt_charging_status
 from psa_car_controller.common.utils import RateLimitException, atomic_write, parse_hour
 from .psa_client import PSAClient
 
@@ -24,6 +25,10 @@ class ChargeControl:
     # fewest minutes between two wakeups while the API doesn't answer: the car can't fix most of
     # these failures, and its battery level stays unknown until the API answers again anyway
     OUTDATED_WAKEUP_TIMEOUT = 30
+    # minutes without news from a charging car after which the API answers, but its level says nothing:
+    # more than one wakeup went unanswered by then, however rare they are. Only during a charge: a parked
+    # car has nothing new to send, so its old date is normal and its level is the real one.
+    STALE_CHARGE_TIMEOUT = 2 * MAX_WAKEUP_TIMEOUT
 
     def __init__(self, psacc: PSAClient, vin, percentage_threshold, stop_hour):
         self.vin = vin
@@ -53,7 +58,8 @@ class ChargeControl:
         sleep(ChargeControl.MQTT_TIMEOUT)
         vehicle_status = self.psacc.get_vehicle_info(self.vin)
         status = self._charging_status(vehicle_status)
-        if status is None or self.psacc.vehicles_list.get_car_by_vin(self.vin).status_outdated:
+        if status is None or self.psacc.vehicles_list.get_car_by_vin(self.vin).status_outdated \
+                or self._charge_status_stale(vehicle_status, status):
             # sending the command again wouldn't tell more, the next refreshes decide
             logger.warning("Can't check if the charge of %s changed, its status is unknown or outdated", self.vin)
             return False
@@ -75,16 +81,34 @@ class ChargeControl:
         charging = vehicle_status.get_energy('Electric').charging
         return None if charging is None else charging.status
 
-    def force_update(self, vehicle_status, outdated=False):
+    @staticmethod
+    def _minutes_since_update(vehicle_status):
+        """Age of the battery level: the date of the status also moves with the position."""
+        last_update = vehicle_status.get_energy('Electric').updated_at
+        if last_update is None:
+            return float('inf')
+        return (datetime.utcnow().replace(tzinfo=pytz.UTC) - last_update).total_seconds() / 60
+
+    def _charge_status_stale(self, vehicle_status, status):
+        """The API answers but the charging car doesn't: as outdated as when the API fails."""
+        if status != INPROGRESS:
+            return False
+        minutes_since_update = self._minutes_since_update(vehicle_status)
+        return self.STALE_CHARGE_TIMEOUT < minutes_since_update < float('inf')
+
+    def force_update(self, vehicle_status, outdated=False, stale=False):
         # force update if the car doesn't send info during wakeup_interval() minutes. The time of
         # the last wakeup counts too: a car which doesn't answer keeps the old updated_at, so it was
         # woken up again on every refresh until the wakeup rate limit stopped it (#1130).
         now = datetime.utcnow().replace(tzinfo=pytz.UTC)
-        last_update = vehicle_status.get_energy('Electric').updated_at
-        minutes_since_update = float('inf') if last_update is None else (now - last_update).total_seconds() / 60
+        minutes_since_update = self._minutes_since_update(vehicle_status)
         interval = self.wakeup_interval(vehicle_status, minutes_since_update)
         if outdated:
             interval = max(interval, self.OUTDATED_WAKEUP_TIMEOUT)
+        elif stale:
+            # each unanswered wakeup doubles the wait: "charging" can be left over from a car which
+            # isn't plugged in anymore, nothing recharges its 12V battery then
+            interval = max(interval, self.OUTDATED_WAKEUP_TIMEOUT, minutes_since_update / 2)
         if minutes_since_update <= interval:
             return
         if self._last_wakeup is not None and (now - self._last_wakeup).total_seconds() <= 60 * interval:
@@ -177,14 +201,16 @@ class ChargeControl:
             status = self._charging_status(vehicle_status)
             level = vehicle_status.get_energy('Electric').level
             outdated = car.status_outdated
+            stale = self._charge_status_stale(vehicle_status, status)
             has_threshold = self.percentage_threshold < 100
             # An outdated level says nothing: the car may have been driven and plugged in again since
             # (and mqtt reports that charge but no level), so nothing is decided from it until the
             # API answers. It only ever hides a reached threshold, while the car is woken up to fix that.
-            hit_threshold = not outdated and level is not None and level >= self.percentage_threshold
+            hit_threshold = not outdated and not stale and level is not None and level >= self.percentage_threshold
             if status == INPROGRESS:
-                logger.info("charging status of %s is %s, battery level: %s", self.vin, status, level)
-                self.force_update(vehicle_status, outdated)
+                logger.info("charging status of %s is %s, battery level: %s%s", self.vin, status, level,
+                            " (too old to decide from)" if stale else "")
+                self.force_update(vehicle_status, outdated, stale)
                 if has_threshold and hit_threshold and self.retry_count < 2:
                     logger.info("Charge threshold is reached, stop the charge")
                     self.control_charge_with_ack(False)
@@ -205,7 +231,8 @@ class ChargeControl:
                 self.force_update(vehicle_status)
                 hour = now.hour - 1 if now.hour > 0 else 23
                 self.psacc.remote_client.change_charge_hour(self.vin, hour, 0)
-            elif status is None or outdated:
+            elif status is None or (outdated and mqtt_charging_status(vehicle_status) is None):
+                # with a state from mqtt, newer than the outdated status and not a charge: it isn't unknown
                 self._stop_if_state_unknown(vehicle_status, has_threshold and hit_threshold, now)
             else:
                 if self._next_stop_hour is not None and self._next_stop_hour < now:

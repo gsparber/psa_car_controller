@@ -76,10 +76,21 @@ class EstimatedChargingTest(unittest.TestCase):
         self.assertEqual([], self.estimated())
 
     def test_gap_limit(self):
-        two_trips(gap=timedelta(hours=72))
+        two_trips(gap=timedelta(hours=72), moved=20)
         self.assertEqual(1, len(self.estimated()))
         get_new_test_db()
-        two_trips(gap=timedelta(hours=72, minutes=1))
+        two_trips(gap=timedelta(hours=72, minutes=1), moved=20)
+        self.assertEqual([], self.estimated())
+
+    def test_gap_limit_only_with_km_in_the_gap(self):
+        # only a charge can raise the level of a car that stood there, however long
+        two_trips(gap=timedelta(hours=100), rise=30)
+        self.assertEqual(1, len(self.estimated()))
+        get_new_test_db()
+        two_trips(gap=timedelta(hours=100), rise=30, moved=1)
+        self.assertEqual(1, len(self.estimated()))
+        get_new_test_db()
+        two_trips(gap=timedelta(hours=100), rise=30, moved=1.1)
         self.assertEqual([], self.estimated())
 
     def test_minimum_rise_parked(self):
@@ -118,6 +129,12 @@ class EstimatedChargingTest(unittest.TestCase):
                 add_real_charge(start, stop)
                 self.assertEqual([], self.estimated())
                 Database.get_db().execute("DELETE FROM battery")
+
+    def test_old_charge_nothing_ended_doesnt_hide_later_ones(self):
+        # it would count as running for ever
+        end_at, stop_at = two_trips()
+        add_real_charge(end_at - timedelta(hours=1), None)
+        self.assertEqual([(end_at, stop_at)], [(c["start_at"], c["stop_at"]) for c in self.estimated()])
 
     def test_charges_outside_the_gap_or_of_another_car_dont_matter(self):
         end_at, stop_at = two_trips()

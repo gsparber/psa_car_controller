@@ -79,8 +79,8 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
    Same fields with `"estimated": true`, but `start_at`/`stop_at` only frame the charge (end of the trip before,
    start of the trip after, or the dates of an estimated trip it happened in), and `kw`, `price`, `co2` and `charging_mode` are `null` because they aren't known.
-   Gaps over 72 h are ignored, and so are rises of 2 % or less (more than 5 % if the car moved in between), which
-   regeneration or temperature can cause. They count in no total and have no charge curve.
+   Gaps over 72 h with more than 1 km in them are ignored, and so are rises of 2 % or less (more than 5 % if the car
+   moved in between), which regeneration or temperature can cause. They count in no total and have no charge curve.
 
 17. Get the vehicle trips:
    
@@ -88,11 +88,12 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
    Each trip has `"estimated": false`, or `"estimated": true` for a drive only known from two positions more than
    2 h apart: the mileage rose by more than 1 km, or by at least 0.2 km/h. A charge or a refuel on the way doesn't
-   change that. All fields stay, with these differences:
+   change that, and with one the positions can be closer: a level that rose and over 1 km are enough.
+   All fields stay, with these differences:
    - `start_at`/`end_at` only frame the drive, and `positions` only holds its end.
    - `duration` and `speed_average` are `null`, the drive took an unknown part of that time.
-   - `consumption`, `consumption_km` and `consumption_fuel_km` are `null` when no level fell. When one fell they
-     come from the levels at both ends, a charge on the way would make them too low.
+   - `consumption`, `consumption_km` and `consumption_fuel_km` are `null` when no level fell or a charge was recorded
+     on the way. Otherwise they come from the levels at both ends, a charge nothing recorded would make them too low.
    - `distance` and `mileage` are as for any other trip.
 
 18. Status of the remote commands

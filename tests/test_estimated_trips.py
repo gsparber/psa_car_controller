@@ -87,6 +87,31 @@ class WhichTripsTest(EstimatedTripTestCase):
         get_new_test_db()
         self.assertEqual([], self.summary((0 * HOUR, 1000, 30), (12 * HOUR, 1000, 80), (24 * HOUR, 1000, 79)))
 
+    def test_charge_and_km_within_the_gap_limit_is_a_drive(self):
+        self.assertEqual([(30, False), (32, True), (18, False)],
+                         self.summary(*FIRST_DRIVE, (80 * MIN, 1062, 90), (90 * MIN, 1071, 88), (100 * MIN, 1080, 86)))
+
+    def test_charge_and_km_as_the_last_pair_is_a_drive(self):
+        self.assertEqual([(30, False), (32, True)], self.summary(*FIRST_DRIVE, (80 * MIN, 1062, 90)))
+
+    def test_charge_and_km_at_the_very_start_is_a_drive(self):
+        self.assertEqual([(32, True), (18, False)],
+                         self.summary((0 * MIN, 1000, 50), (60 * MIN, 1032, 90), (70 * MIN, 1041, 88),
+                                      (80 * MIN, 1050, 86), (20 * HOUR, 1050, 86)))
+
+    def test_charge_and_a_car_moved_on_a_parking_lot_stay_no_trip(self):
+        self.assertEqual([(30, False), (18, False)],
+                         self.summary(*FIRST_DRIVE, (80 * MIN, 1031, 90), (90 * MIN, 1040, 88), (100 * MIN, 1049, 86)))
+
+    def test_small_rise_on_the_way_stays_in_the_trip(self):
+        self.assertEqual([(62, False)], self.summary(*FIRST_DRIVE, (40 * MIN, 1062, 77)))
+
+    def test_refuel_and_km_within_the_gap_limit_is_a_drive(self):
+        trips = self.trips((0 * MIN, 1000, 40, 50), (10 * MIN, 1015, 40, 49), (20 * MIN, 1030, 40, 48),
+                           (80 * MIN, 1060, 40, 90), (90 * MIN, 1075, 40, 89), (100 * MIN, 1090, 40, 88),
+                           vehicle=HYBRID)
+        self.assertEqual([(30, False), (30, True), (30, False)], [(trip.distance, trip.estimated) for trip in trips])
+
     def test_no_trip_overlaps_and_no_km_counts_twice(self):
         rand = random.Random(85)
         for _ in range(150):
@@ -171,6 +196,25 @@ class ChargeInTheGapTest(EstimatedTripTestCase):
         self.assertEqual(START + GAP_END, estimated[0]["stop_at"])
         self.assertEqual(1030, estimated[0]["mileage"])
 
+    def test_charge_and_km_within_the_gap_limit(self):
+        record(*FIRST_DRIVE, (80 * MIN, 1062, 90), (90 * MIN, 1071, 88), (100 * MIN, 1080, 86))
+        trips = Trips.get_trips(CARS)[car.vin]
+        info = trips[1].get_info()
+        self.assertIsNone(info["consumption_km"])
+        self.assertIsNone(info["duration"])
+        # the km of this trip must not change the average of the others
+        recorded = insights_data.trip_totals(insights_data.trip_rows([trips[0], trips[2]]))
+        totals = insights_data.trip_totals(insights_data.trip_rows(trips))
+        self.assertEqual(recorded["consumption"], totals["consumption"])
+        self.assertEqual(80, totals["distance"])
+        estimated = Charging.get_estimated_chargings(CARS)
+        self.assertEqual([(72, 90)], [(charge["start_level"], charge["end_level"]) for charge in estimated])
+        conn = Database.get_db()
+        conn.execute("INSERT INTO battery(start_at,stop_at,VIN,start_level,end_level) VALUES(?,?,?,?,?)",
+                     (START + 30 * MIN, START + 70 * MIN, car.vin, 72, 90))
+        conn.commit()
+        self.assertEqual([], Charging.get_estimated_chargings(CARS))
+
     def test_recorded_charge_isnt_estimated(self):
         record(*self.POINTS)
         conn = Database.get_db()
@@ -182,6 +226,83 @@ class ChargeInTheGapTest(EstimatedTripTestCase):
 
     def test_small_rise_is_no_charge(self):
         record(*FIRST_DRIVE, (GAP_END, 1060, 75), (GAP_END + PARKED, 1060, 75))
+        self.assertEqual([], Charging.get_estimated_chargings(CARS))
+
+
+class RecordedChargeInTheGapTest(EstimatedTripTestCase):
+    """The level fell by 1 % over 359 km: the car charged on the way, and the battery table says so."""
+    FRAME_START = START + 20 * MIN
+    FRAME_END = START + GAP_END
+    POINTS = (*FIRST_DRIVE, (GAP_END, 1389, 71), (GAP_END + PARKED, 1389, 71))
+
+    def add_charge(self, start_at, stop_at, vin=car.vin):
+        conn = Database.get_db()
+        conn.execute("INSERT INTO battery(start_at,stop_at,VIN,start_level,end_level) VALUES(?,?,?,?,?)",
+                     (start_at, stop_at, vin, 40, 79))
+        conn.commit()
+
+    def gap_trip(self, *charge):
+        self.add_charge(*charge)
+        trips = Trips.get_trips(CARS)[car.vin]
+        self.assertEqual([(30, False), (359, True)], [(trip.distance, trip.estimated) for trip in trips])
+        Database.get_db().execute("DELETE FROM battery")
+        return trips[1]
+
+    def test_charge_on_the_way_makes_the_consumption_unknown(self):
+        record(*self.POINTS)
+        for charge in ((self.FRAME_START + HOUR, self.FRAME_START + 3 * HOUR),  # inside
+                       (self.FRAME_START - HOUR, self.FRAME_START + HOUR),  # ends in the gap
+                       (self.FRAME_END - HOUR, self.FRAME_END + HOUR),  # starts in the gap
+                       (self.FRAME_START - HOUR, self.FRAME_END + HOUR),  # around the gap
+                       (self.FRAME_START + HOUR, None)):  # not ended
+            with self.subTest(charge=charge):
+                info = self.gap_trip(*charge).get_info()
+                self.assertEqual((None, None), (info["consumption"], info["consumption_km"]))
+                self.assertEqual((359, 1389), (info["distance"], info["mileage"]))
+
+    def test_recorded_without_timezone(self):
+        record(*self.POINTS)
+        naive = (self.FRAME_START + HOUR).replace(tzinfo=None)
+        self.assertFalse(self.gap_trip(naive, naive + HOUR).consumption_known)
+
+    def test_other_charges_leave_the_consumption(self):
+        record(*self.POINTS)
+        for charge in ((self.FRAME_START - 2 * HOUR, self.FRAME_START - HOUR),  # before
+                       (self.FRAME_END + HOUR, self.FRAME_END + 2 * HOUR),  # after
+                       (self.FRAME_START - HOUR, self.FRAME_START),  # touching
+                       (self.FRAME_END, self.FRAME_END + HOUR),
+                       (self.FRAME_START - HOUR, None)):  # an old one nothing ended
+            with self.subTest(charge=charge):
+                expected = 1 * car.battery_power / 359
+                self.assertAlmostEqual(expected, self.gap_trip(*charge).get_info()["consumption_km"])
+
+    def test_charge_of_another_car_leaves_the_consumption(self):
+        record(*self.POINTS)
+        self.assertTrue(self.gap_trip(self.FRAME_START + HOUR, self.FRAME_START + 2 * HOUR, "another").consumption_known)
+
+    def test_recorded_trips_keep_their_consumption(self):
+        record(*self.POINTS)
+        self.add_charge(START - HOUR, self.FRAME_END + HOUR)  # a stored charge over days holds trips too
+        trip = Trips.get_trips(CARS)[car.vin][0]
+        self.assertAlmostEqual(8 * car.battery_power / 30, trip.get_info()["consumption_km"])
+
+    def test_too_high_a_consumption_doesnt_lose_the_km(self):
+        # 40 % over 2 km would be filtered, with a charge on the way it tells nothing and the km count
+        record(*FIRST_DRIVE, (GAP_END, 1032, 32), (GAP_END + PARKED, 1032, 32))
+        self.assertEqual([30], [trip.distance for trip in Trips.get_trips(CARS)[car.vin]])
+        self.add_charge(self.FRAME_START + HOUR, self.FRAME_START + 2 * HOUR)
+        self.assertEqual([30, 2], [round(trip.distance) for trip in Trips.get_trips(CARS)[car.vin]])
+
+    def test_average_of_the_insights(self):
+        record(*self.POINTS)
+        self.add_charge(self.FRAME_START + HOUR, self.FRAME_START + 3 * HOUR)
+        totals = insights_data.trip_totals(insights_data.trip_rows(Trips.get_trips(CARS)[car.vin]))
+        self.assertEqual(389, totals["distance"])
+        self.assertAlmostEqual(100 * (8 * car.battery_power / 100) / 30, totals["consumption"])
+
+    def test_isnt_estimated_as_well(self):
+        record(*self.POINTS)
+        self.add_charge(self.FRAME_START + HOUR, self.FRAME_START + 3 * HOUR)
         self.assertEqual([], Charging.get_estimated_chargings(CARS))
 
 

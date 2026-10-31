@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 PERIODS = OrderedDict([("7d", ("7 days", 7, "day")), ("30d", ("30 days", 30, "day")),
                        ("365d", ("12 months", 365, "month")), ("all", ("All", None, "month"))])
+# The least a charging station offers is 6 A at 230 V, 1.38 kW. Slower, and the dates of a charge can't be the time it
+# charged: nothing saw it end in time. Same value as MIN_CHARGE_KW of clientside.js.
+MIN_CHARGE_KW = 1
 
 
 def _aware(date):
@@ -89,11 +92,11 @@ def charge_totals(charges):
     priced = [c for c in charges if _known(c["price"])]
     cost = sum(c["price"] for c in priced)
     priced_energy = sum(_num(c["kw"]) for c in priced)
-    durations = [(c["stop_at"] - c["start_at"]).total_seconds() / 3600 for c in charges
-                 if c["stop_at"] and c["start_at"] and c["stop_at"] > c["start_at"]]
-    hours = sum(durations)
-    charged_with_duration = sum(_num(c["kw"]) for c in charges if c["stop_at"] and c["start_at"]
-                                and c["stop_at"] > c["start_at"])
+    timed = [(_num(c["kw"]), (c["stop_at"] - c["start_at"]).total_seconds() / 3600) for c in charges
+             if c["stop_at"] and c["start_at"] and c["stop_at"] > c["start_at"]]
+    timed = [(kw, hours) for kw, hours in timed if kw / hours >= MIN_CHARGE_KW]
+    hours = sum(duration for _, duration in timed)
+    charged_with_duration = sum(kw for kw, _ in timed)
     return {"energy": energy, "count": len(charges), "cost": cost if priced else None,
             "price_per_kwh": cost / priced_energy if priced_energy else None,
             "avg_power": charged_with_duration / hours if hours else None}

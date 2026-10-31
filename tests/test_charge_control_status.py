@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from psa_car_controller.psa.RemoteClient import RemoteClient
 from psa_car_controller.psa.connected_car_api.models.energy import Energy
 from psa_car_controller.psa.connected_car_api.models.energy_charging import EnergyCharging
-from psa_car_controller.psa.constants import DELAYED_CHARGE, INPROGRESS, STOPPED
+from psa_car_controller.psa.constants import DELAYED_CHARGE, DISCONNECTED, INPROGRESS, STOPPED
 from psa_car_controller.psa.mqtt_event import VehicleEvents
 from psa_car_controller.psacc.application.charge_control import ChargeControl
 from psa_car_controller.psacc.model.car import Car, Cars, EMPTY_STATUS_LIMIT
@@ -13,7 +13,7 @@ from psa_car_controller.psacc.model.car_status import CarStatus
 
 VIN = "VR3UHZKXZLT000000"
 HOUR = "PT22H"
-MQTT_IN_PROGRESS = 1
+MQTT_DISCONNECTED, MQTT_IN_PROGRESS, MQTT_UNKNOWN, MQTT_STOPPED = 0, 1, 2, 3
 
 
 def charging(status=INPROGRESS, next_delayed_time=HOUR):
@@ -295,6 +295,171 @@ class TestChargeControlStatus(unittest.TestCase):
         # THEN no second stop is sent blindly, one try is left for when the API answers
         self.assertEqual(1, self.stops())
         self.assertEqual(1, cc.retry_count)
+
+    # the API fails, but mqtt knows newer than its last status
+
+    def overlay_mqtt_status(self, hmi_state):
+        events = VehicleEvents(VIN)
+        events.add({"date": "2020-01-01T00:00:00Z", "obj_counter": 1,
+                    "charging_state": {"hmi_state": MQTT_IN_PROGRESS}})
+        events.add({"date": (datetime.now(timezone.utc) + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "obj_counter": 2, "charging_state": {"hmi_state": hmi_state}})
+        events.apply(self.car.status)
+
+    def test_stop_hour_sends_nothing_when_mqtt_says_nothing_charges(self):
+        cases = ((INPROGRESS, MQTT_DISCONNECTED), (INPROGRESS, MQTT_STOPPED),
+                 (STOPPED, MQTT_DISCONNECTED), (DISCONNECTED, MQTT_DISCONNECTED), (STOPPED, MQTT_STOPPED))
+        for rest_status, hmi_state in cases:
+            with self.subTest(rest_status=rest_status, hmi_state=hmi_state):
+                self.set_status(get_status(charging(status=rest_status), minutes_old=600), outdated=True)
+                self.overlay_mqtt_status(hmi_state)
+                cc = self.charge_control(threshold=100, stop_due=True)
+
+                cc.process()
+
+                self.assertEqual(0, self.stops())
+                # the stop hour is dealt with, like with a recent status of a car which doesn't charge
+                self.assertGreater(cc._next_stop_hour, datetime.now())
+                self.remote.wakeup.assert_not_called()
+
+    def test_stop_hour_still_stops_when_mqtt_is_older_than_the_status(self):
+        # GIVEN the last event from before the API status: it doesn't tell the newest state
+        self.set_status(get_status(charging(status=STOPPED), minutes_old=600), outdated=True)
+        events = VehicleEvents(VIN)
+        for counter, hmi_state in enumerate((MQTT_IN_PROGRESS, MQTT_DISCONNECTED)):
+            events.add({"date": "2020-01-01T00:00:00Z", "obj_counter": counter,
+                        "charging_state": {"hmi_state": hmi_state}})
+        events.apply(self.car.status)
+
+        self.charge_control(threshold=100, stop_due=True).process()
+
+        self.assertEqual(1, self.stops())
+
+    def test_stop_hour_still_stops_when_mqtt_has_an_unknown_state(self):
+        self.set_status(get_status(charging(status=STOPPED), minutes_old=600), outdated=True)
+        self.overlay_mqtt_status(MQTT_UNKNOWN)
+
+        self.charge_control(threshold=100, stop_due=True).process()
+
+        self.assertEqual(1, self.stops())
+
+    def test_stop_hour_stops_again_when_mqtt_reports_the_next_charge(self):
+        self.set_status(get_status(charging(status=INPROGRESS), minutes_old=600), outdated=True)
+        events = VehicleEvents(VIN)
+        for counter, hmi_state in enumerate((MQTT_IN_PROGRESS, MQTT_DISCONNECTED, MQTT_IN_PROGRESS)):
+            date = datetime.now(timezone.utc) + timedelta(minutes=counter)
+            events.add({"date": date.strftime("%Y-%m-%dT%H:%M:%SZ"), "obj_counter": counter,
+                        "charging_state": {"hmi_state": hmi_state}})
+            events.apply(self.car.status)
+
+        self.charge_control(threshold=100, stop_due=True).process()
+
+        self.assertEqual(1, self.stops())
+
+    # the API answers, but with an old status
+
+    def test_old_level_during_a_charge_doesnt_stop_it_but_wakes_the_car_up(self):
+        self.set_status(get_status(charging(), minutes_old=600))
+        cc = self.charge_control()
+
+        cc.process()
+
+        self.assertEqual(0, self.stops())
+        self.remote.wakeup.assert_called_once_with(VIN)
+
+    def test_old_level_with_a_new_charge_from_mqtt_doesnt_stop_it(self):
+        # GIVEN the car stopped at 85 % hours ago, was driven since, and mqtt reports it charging again
+        self.set_status(get_status(charging(status=STOPPED), minutes_old=600))
+        self.overlay_mqtt_charge()
+
+        self.charge_control().process()
+
+        self.assertEqual(0, self.stops())
+
+    def test_old_top_level_date_isnt_what_counts_but_the_date_of_the_level(self):
+        # GIVEN only the position is recent
+        status = get_status(charging(), minutes_old=600)
+        status._updated_at = datetime.now(timezone.utc)
+        self.set_status(status)
+
+        self.charge_control().process()
+
+        self.assertEqual(0, self.stops())
+
+    def test_level_within_the_limit_still_stops_a_slow_charge(self):
+        # GIVEN a slow charge which doesn't update the API for a while (#1130)
+        self.set_status(get_status(charging(), minutes_old=ChargeControl.STALE_CHARGE_TIMEOUT - 5))
+
+        self.charge_control().process()
+
+        self.assertGreaterEqual(self.stops(), 1)
+
+    def test_threshold_is_enforced_again_with_a_recent_status(self):
+        self.set_status(get_status(charging(), minutes_old=600))
+        cc = self.charge_control()
+        cc.process()
+        self.assertEqual(0, self.stops())
+
+        self.set_status(get_status(charging()))
+        cc.process()
+
+        self.assertGreaterEqual(self.stops(), 1)
+
+    def test_old_status_after_the_stop_isnt_a_failed_stop(self):
+        self.set_status(get_status(charging(), minutes_old=600))
+        cc = self.charge_control(threshold=100, stop_due=True)
+
+        cc.process()
+
+        # THEN the stop hour works, but the old status can't tell if it did: no second one
+        self.assertEqual(1, self.stops())
+        self.assertEqual(1, cc.retry_count)
+
+    def test_old_status_wakes_the_car_up_less_and_less(self):
+        # GIVEN a car which doesn't answer: the status stays where it is for a whole day
+        date = datetime.now(timezone.utc) - timedelta(minutes=ChargeControl.STALE_CHARGE_TIMEOUT)
+        self.set_status(get_status(charging(), level=50))
+        electric = self.car.status.get_energy('Electric')
+        cc = self.charge_control()
+
+        for minute in range(0, 24 * 60, 2):
+            electric.updated_at = date - timedelta(minutes=minute + 2)
+            if cc._last_wakeup is not None:
+                cc._last_wakeup -= timedelta(minutes=2)
+            cc.process()
+
+        # at 2 h, 4 h, 8 h and 16 h of age, where every 10 min would be 144 wakeups
+        self.assertEqual(4, self.remote.wakeup.call_count)
+
+    def test_parked_car_with_an_old_status_is_left_alone(self):
+        for status in (STOPPED, DISCONNECTED):
+            with self.subTest(status=status):
+                self.set_status(get_status(charging(status=status), minutes_old=600))
+
+                self.charge_control().process()
+
+                self.assertEqual(0, self.stops())
+                self.remote.wakeup.assert_not_called()
+
+    def test_parked_car_with_an_old_status_still_postpones_the_scheduled_charge(self):
+        # a parked car has no newer level to send, it is the real one
+        now = datetime.now().replace(hour=12, minute=0)
+        self.set_status(get_status(charging(status=STOPPED, next_delayed_time="PT12H10M"), minutes_old=600))
+
+        with patch("psa_car_controller.psacc.application.charge_control.datetime") as mock_datetime:
+            mock_datetime.now.return_value = now
+            mock_datetime.utcnow.return_value = now
+            self.charge_control().process()
+
+        self.remote.change_charge_hour.assert_called_once()
+
+    def test_old_status_stays_out_of_the_api_failures(self):
+        # the UI and X-Status-Outdated say the API fails: not true here, and a parked car would show it for days
+        self.set_status(get_status(charging(), minutes_old=600))
+
+        self.charge_control().process()
+
+        self.assertFalse(self.car.status_outdated)
 
 
 if __name__ == '__main__':

@@ -483,6 +483,22 @@ function nbFormat (nb) {
   return numberText(nb, Math.abs(nb) >= 1000 ? 0 : 2)
 }
 
+// The least a charging station offers is 6 A at 230 V, 1.38 kW. Slower, and the dates of a charge can't be the time it
+// charged: nothing saw it end in time. Same value as MIN_CHARGE_KW of insights_data.py.
+const MIN_CHARGE_KW = 1
+
+function chargingSpeed (chargings) {
+  let energy = 0; let time = 0
+  chargings.forEach(function (charge) {
+    const hours = ((new Date(charge.stop_at)) - (new Date(charge.start_at))) / 3600000
+    if (charge.stop_at && hours > 0 && typeof charge.kw === 'number' && charge.kw / hours >= MIN_CHARGE_KW) {
+      energy += charge.kw
+      time += hours
+    }
+  })
+  return time > 0 ? energy / time : NaN
+}
+
 function updateCardsValue (data) {
   // all of them: a range without data must not leave the values of the previous range in the cards
   const res = {
@@ -495,26 +511,24 @@ function updateCardsValue (data) {
     avg_consum_price: NaN
   }
   let avgPriceKw
-  let avgC02 = new Avg(); let avgKw = new Avg(); const avgTime = new Avg()
+  let avgC02 = new Avg(); let avgKw = new Avg()
   const avgPrice = new Avg()
   data.chargings.forEach(function (charge) {
-    const diff = ((new Date(charge.stop_at)) - (new Date(charge.start_at))) / 3600000
     avgKw.addValue(charge.kw)
     avgC02.addValue(charge.co2)
     avgPrice.addValue(charge.price)
-    if (diff > 0) {
-      avgTime.addValue(diff)
-    }
   })
   if (data.chargings.length > 0) {
     avgKw = avgKw.average()
     avgC02 = avgC02.average()
     avgPriceKw = avgPrice.average() / avgKw
     res.avg_emission_kw = avgC02
-    res.avg_chg_speed = avgKw / avgTime.average()
+    res.avg_chg_speed = chargingSpeed(data.chargings)
   }
   if (data.trips.length > 0) {
-    const totalDistance = Math.abs(data.trips[data.trips.length - 1].mileage - data.trips[0].mileage)
+    // the rows can come in the order of the table
+    const mileages = data.trips.map(trip => trip.mileage)
+    const totalDistance = Math.max(...mileages) - Math.min(...mileages)
     res.avg_consum_kw = Avg.getAverageFromKey(data.trips, 'consumption_km')
     res.elec_consum_kw = totalDistance * res.avg_consum_kw / 100
   }

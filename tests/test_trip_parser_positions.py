@@ -77,8 +77,8 @@ class LastPairTest(TripParserTestCase):
         self.assertEqual([], self.distances((0 * HOUR, 1000, 30), (8 * HOUR, 1000, 75)))
 
     def test_charged_and_moved_in_the_last_pair(self):
-        # how far it went on what can't be told, the levels aren't those of a drive
-        self.assertEqual([], self.distances((0 * HOUR, 1000, 75), (12 * HOUR, 1000, 75), (13 * HOUR, 1030, 90)))
+        # the km count, how far it went on what can't be told: its consumption stays unknown
+        self.assertEqual([30], self.distances((0 * HOUR, 1000, 75), (12 * HOUR, 1000, 75), (13 * HOUR, 1030, 90)))
 
     def test_parked_positions(self):
         self.assertEqual([], self.distances((0 * HOUR, 1000, 75), (12 * HOUR, 1000, 75), (24 * HOUR, 1000, 74)))

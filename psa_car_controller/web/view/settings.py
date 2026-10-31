@@ -30,7 +30,7 @@ LANGUAGE = "settings-language"
 LANGUAGE_SAVED = "settings-language-saved"
 
 # account states
-NO_ACCOUNT, LOGIN_FAILED, LOGGED_IN = "none", "failed", "ok"
+NO_ACCOUNT, LOGIN_FAILED, LOGIN_RETRYING, LOGGED_IN = "none", "failed", "retrying", "ok"
 # remote control states
 REMOTE_OFF, REMOTE_SETUP, REMOTE_PAUSED, REMOTE_ERROR, REMOTE_OK = "off", "setup", "paused", "error", "ok"
 
@@ -51,7 +51,12 @@ def account_state():
     if _myp() is None:
         return NO_ACCOUNT
     # is_good only tells about the start: PSA can reject the login any time later
-    return LOGGED_IN if app().is_good and not read(lambda: _myp().manager.needs_login, False) else LOGIN_FAILED
+    if read(lambda: _myp().manager.needs_login, False):
+        return LOGIN_FAILED
+    if app().is_good:
+        return LOGGED_IN
+    # not connected since the start, which an outage explains as well as a rejected login
+    return LOGIN_RETRYING if _myp().manager.refresh_failure_is_temporary() else LOGIN_FAILED
 
 
 def remote_state():
@@ -99,6 +104,14 @@ def _account(state):
                 html.Div(login_form(), className="card-block")]
     app_name = read(lambda: realm_info[_myp().realm]["app_name"], "PSA account")
     country = read(lambda: _myp().country_code)
+    if state == LOGIN_RETRYING:
+        row = _status_row("bi-person-circle", app_name + (f" · {country}" if country else ""), "Retrying", "warn")
+        return [html.Div(row, className="list-group mb-3"),
+                dbc.Alert([html.Strong("Temporary connection problem. "),
+                           "Your login is kept and it retries on its own, the car can't be read until then. "
+                           "If this doesn't stop, log in again below."], color="warning"),
+                html.Details([html.Summary("Log in again"),
+                              html.Div(login_form(_brand(), country=country), className="card-block")])]
     row = _status_row("bi-person-circle", app_name + (f" · {country}" if country else ""),
                       "Connected" if state == LOGGED_IN else "Not connected", state == LOGGED_IN)
     if state == LOGGED_IN:

@@ -1,4 +1,5 @@
 import logging
+from datetime import timezone
 from typing import Dict
 
 from geojson import FeatureCollection
@@ -19,10 +20,15 @@ GAP_HOURS = 2
 MIN_SLOW_GAP_KM = 1
 
 
+def as_utc(date):
+    return date.replace(tzinfo=timezone.utc) if date is not None and date.tzinfo is None else date
+
+
 class Trips(list):
     def __init__(self, *args):
         list.__init__(self, *args)
         self.trip_num = 1
+        self.recorded_charges = []
 
     def to_geo_json(self):
         feature_collection = FeatureCollection(self)
@@ -60,9 +66,12 @@ class Trips(list):
         return TripParser.is_low_speed(speed_average, duration) or trip_parser.is_refuel(start, end, distance)
 
     @staticmethod
-    def is_drive_in_gap(start, end):
+    def is_drive_in_gap(start, end, trip_parser: TripParser):
         """The car drove between two positions, whatever the levels say: a charge on the way doesn't undo the km."""
         distance = end["mileage"] - start["mileage"]
+        # However short the time, the levels can't come from the same trip: the positions don't tell the drive
+        if distance > MIN_SLOW_GAP_KM and trip_parser.is_refuel(start, end, distance):
+            return True
         duration = (end["Timestamp"] - start["Timestamp"]).total_seconds() / 3600
         speed_average = Trips.get_speed_average(distance, duration)
         return duration > GAP_HOURS and (not TripParser.is_low_speed(speed_average, duration)
@@ -73,6 +82,15 @@ class Trips(list):
         trip = Trip()
         trip.estimated = True
         self.close_trip(trip, start, end, trip_parser)
+
+    def is_charged_between(self, start, end):
+        """A recorded charge between two positions. One without an end only counts there if it started there: it can
+        be an old one nothing ended, and whatever came after it isn't part of it."""
+        start_at, end_at = as_utc(start["Timestamp"]), as_utc(end["Timestamp"])
+        for charge_start, charge_stop in self.recorded_charges:
+            if charge_start < end_at and (charge_stop or charge_start) > start_at:
+                return True
+        return False
 
     def close_trip(self, trip: Trip, start, end, trip_parser: TripParser):
         logger.debugv("stop trip at {0[Timestamp]} mileage:{0[mileage]:.1f} level:{0[level]}"
@@ -93,7 +111,12 @@ class Trips(list):
             trip.car = trip_parser.car
             if trip.estimated:
                 # A level that didn't fall says nothing here: charged or refuelled on the way, or never reported.
-                trip.consumption_known = diff_level > 0 or diff_level_fuel > 0
+                # One that fell says too little if the car charged on the way, the charge then shouldn't look like
+                # a low consumption.
+                trip.consumption_known = (diff_level > 0 or diff_level_fuel > 0) \
+                    and not self.is_charged_between(start, end)
+                if not trip.consumption_known:
+                    diff_level = diff_level_fuel = 0
                 diff_level_fuel = max(diff_level_fuel, 0)
             if diff_level != 0:
                 trip.set_consumption(diff_level)  # kw
@@ -116,6 +139,9 @@ class Trips(list):
         for vin in vehicles:
             trips = Trips()
             vin = vin[0]
+            charges = conn.execute("SELECT start_at, stop_at FROM battery WHERE VIN=? AND start_at IS NOT NULL",
+                                   (vin,)).fetchall()
+            trips.recorded_charges = [(as_utc(charge["start_at"]), as_utc(charge["stop_at"])) for charge in charges]
             res = conn.execute(
                 'SELECT Timestamp, VIN, longitude, latitude, mileage, level, moving, temperature, '
                 'level_fuel, altitude FROM position WHERE VIN=? '
@@ -141,7 +167,8 @@ class Trips(list):
                     except TypeError:
                         logger.debug("Bad mileage value in DB")
                     # Without positions yet, end is the one right after start: nothing has looked at this pair.
-                    gap_before = start is not end and not trip.positions and Trips.is_drive_in_gap(start, end)
+                    gap_before = start is not end and not trip.positions \
+                        and Trips.is_drive_in_gap(start, end, trip_parser)
                     if gap_before:
                         trips.close_drive_in_gap(start, end, trip_parser)
                     if gap_before or Trips.is_restart(start, end, distance, trip_parser):
@@ -155,7 +182,7 @@ class Trips(list):
                         speed_average = Trips.get_speed_average(distance, duration)
                         end_trip = False
                         drive_in_gap = False
-                        if Trips.is_drive_in_gap(end, next_point):
+                        if Trips.is_drive_in_gap(end, next_point, trip_parser):
                             end_trip = True
                             drive_in_gap = True
                             logger.debugv("too much time detected")
@@ -180,7 +207,7 @@ class Trips(list):
                 # Everywhere else it leaves with start and end on the last position.
                 distance = end["mileage"] - start["mileage"]
                 if start is not end:
-                    if Trips.is_drive_in_gap(start, end):
+                    if Trips.is_drive_in_gap(start, end, trip_parser):
                         trips.close_drive_in_gap(start, end, trip_parser)
                     elif not Trips.is_restart(start, end, distance, trip_parser):
                         trips.close_trip(trip, start, end, trip_parser)
