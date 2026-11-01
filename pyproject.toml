@@ -48,13 +48,11 @@ scipy = [
 
 [tool.poetry.dev-dependencies]
 prospector = "1.12.1"
-pre-commit = "2.21.0"
-coverage = "6.5.0"
-deepdiff = "5.8.1"
-greenery = "3.3.7"
+pre-commit = "4.7.0"
+coverage = "7.17.0"
+deepdiff = "9.1.0"
 autopep8 = "2.3.2"
 pylint = "3.3.6"
-ipython = "7.34.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

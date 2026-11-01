@@ -14,7 +14,6 @@ import ruamel.yaml
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509 import load_pem_x509_certificate
 from dateutil.tz import tzutc
-from greenery.lego import parse, charclass
 from pytz import UTC
 
 from psa_car_controller import psa
