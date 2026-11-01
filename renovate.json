@@ -51,14 +51,14 @@
       "separateMajorMinor": false
     },
     {
-      "description": "CI tests the Python of the image, Debian 12 ships 3.11. U20/U21 move image and CI to 3.13 together, change this rule with them",
+      "description": "CI tests the Python of the image, Debian 13 ships 3.13. Change this rule with the Debian version",
       "matchManagers": [
         "github-actions"
       ],
       "matchDepNames": [
         "python"
       ],
-      "allowedVersions": "/^3\\.11(\\.|$)/"
+      "allowedVersions": "/^3\\.13(\\.|$)/"
     },
     {
       "description": "The supported Python range is a decision, not an update",
@@ -81,25 +81,12 @@
       "allowedVersions": "/^2[24]\\.04$/"
     },
     {
-      "description": "Debian 13 and numpy 2 only work together (U20): the Debian tag alone breaks the pip step, numpy 2 on Debian 12 breaks pandas",
+      "description": "A new Debian changes Python and the system packages: the tag alone broke the pip step of the image from 12 to 13",
       "matchDatasources": [
         "docker"
       ],
       "matchPackageNames": [
         "debian"
-      ],
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "dependencyDashboardApproval": true
-    },
-    {
-      "description": "See the Debian rule above (U20)",
-      "matchManagers": [
-        "poetry"
-      ],
-      "matchPackageNames": [
-        "numpy"
       ],
       "matchUpdateTypes": [
         "major"
