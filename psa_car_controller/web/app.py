@@ -1,5 +1,5 @@
+import importlib
 import logging
-import sys
 import threading
 from contextvars import ContextVar
 from functools import lru_cache
@@ -20,10 +20,6 @@ except ImportError:
 
 from psa_car_controller.common import language
 from psa_car_controller.common.mylogger import file_handler
-if sys.version_info >= (3, 8):
-    import importlib
-else:
-    import importlib_metadata as importlib
 
 # pylint: disable=invalid-name
 app = None
