@@ -94,6 +94,19 @@
       "dependencyDashboardApproval": true
     },
     {
+      "description": "The image uses the pandas of Debian 13 (2.2.3), a new major also needs a look at the pages",
+      "matchManagers": [
+        "poetry"
+      ],
+      "matchPackageNames": [
+        "pandas"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "docker-compose.yml is what users copy, keep it on the latest tag without a digest",
       "matchManagers": [
         "docker-compose"
