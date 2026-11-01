@@ -67,7 +67,7 @@ class Ecomix:
     def get_data_from_co2_signal(latitude, longitude, country_code_default):
         if Ecomix.co2_signal_key is not None:
             try:
-                now = datetime.utcnow().replace(tzinfo=UTC)
+                now = datetime.now(UTC)
                 country_code = Ecomix.get_country(latitude, longitude, country_code_default)
                 if country_code is None:
                     logger.warning("Can't find the country of the car")
@@ -109,7 +109,7 @@ class Ecomix:
 
     @staticmethod
     def clean_cache():
-        max_date = datetime.utcnow().replace(tzinfo=UTC) - timedelta(days=1)
+        max_date = datetime.now(UTC) - timedelta(days=1)
         for values in Ecomix._cache.values():
             values[:] = [x for x in values if max_date < x[0]]
 

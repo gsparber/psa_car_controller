@@ -87,7 +87,7 @@ class ChargeControl:
         last_update = vehicle_status.get_energy('Electric').updated_at
         if last_update is None:
             return float('inf')
-        return (datetime.utcnow().replace(tzinfo=pytz.UTC) - last_update).total_seconds() / 60
+        return (datetime.now(pytz.UTC) - last_update).total_seconds() / 60
 
     def _charge_status_stale(self, vehicle_status, status):
         """The API answers but the charging car doesn't: as outdated as when the API fails."""
@@ -100,7 +100,7 @@ class ChargeControl:
         # force update if the car doesn't send info during wakeup_interval() minutes. The time of
         # the last wakeup counts too: a car which doesn't answer keeps the old updated_at, so it was
         # woken up again on every refresh until the wakeup rate limit stopped it (#1130).
-        now = datetime.utcnow().replace(tzinfo=pytz.UTC)
+        now = datetime.now(pytz.UTC)
         minutes_since_update = self._minutes_since_update(vehicle_status)
         interval = self.wakeup_interval(vehicle_status, minutes_since_update)
         if outdated:

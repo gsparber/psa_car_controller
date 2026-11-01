@@ -43,7 +43,7 @@ def card_value_div(card_id, unit, value="–"):
 
 def dash_date_to_datetime(st):
     if isinstance(st, (int, float)):
-        return datetime.utcfromtimestamp(st / 1000).replace(tzinfo=UTC)
+        return datetime.fromtimestamp(st / 1000, UTC)
     return datetime.strptime(st, "%Y-%m-%dT%H:%M:%S.000Z").replace(tzinfo=UTC)
 
 

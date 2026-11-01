@@ -522,8 +522,8 @@ class TestUnit(unittest.TestCase):
         self.assertFalse(is_kept(thermal, consumption_fuel_km=31))
 
     def test_c02_signal_cache(self):
-        start = datetime.utcnow().replace(tzinfo=UTC) - timedelta(minutes=30)
-        end = datetime.utcnow().replace(tzinfo=UTC)
+        start = datetime.now(UTC) - timedelta(minutes=30)
+        end = datetime.now(UTC)
         Ecomix._cache = {'FR': [[start - timedelta(days=1), 100],
                                 [start + timedelta(minutes=1), 10],
                                 [start + timedelta(minutes=2), 20],
@@ -537,8 +537,8 @@ class TestUnit(unittest.TestCase):
             PSAClient.load_config("./config/config.json")
             def_country = "FR"
             Ecomix.get_data_from_co2_signal(latitude, longitude, def_country)
-            res = Ecomix.get_co2_from_signal_cache(datetime.utcnow().replace(tzinfo=UTC) - timedelta(minutes=5),
-                                                   datetime.utcnow().replace(tzinfo=UTC), def_country)
+            res = Ecomix.get_co2_from_signal_cache(datetime.now(UTC) - timedelta(minutes=5),
+                                                   datetime.now(UTC), def_country)
             self.assertIsInstance(res, (int, float))
 
     def test_charge_control(self):

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from psa_car_controller.psa.constants import PSA_DATE_FORMAT, PSA_CORRELATION_DATE_FORMAT
@@ -19,7 +19,7 @@ class MQTTRequest:
         self.date = datetime.now()
         self.data = {}
         # the answer carries this id: it tells which command it belongs to
-        self.correlation_id = self.__gen_correlation_id(datetime.utcnow())
+        self.correlation_id = self.__gen_correlation_id(datetime.now(timezone.utc))
         self.retried = False
 
     def retry(self):
@@ -32,7 +32,7 @@ class MQTTRequest:
         return json.dumps(self.get_message(remote_access_token))
 
     def get_message(self, remote_access_token):
-        date = datetime.utcnow()
+        date = datetime.now(timezone.utc)
         date_str = date.strftime(PSA_DATE_FORMAT)
         self.data = {"access_token": remote_access_token, "customer_id": self.customer_id,
                      "correlation_id": self.correlation_id, "req_date": date_str, "vin": self.vin,

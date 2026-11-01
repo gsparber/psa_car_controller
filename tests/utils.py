@@ -51,7 +51,7 @@ def wait_for_job(kind, registry=None, timeout=10):
 
 latitude = 47.2183
 longitude = -1.55362
-date3 = datetime.utcnow().replace(2021, 3, 1, 12, 00, 00, 00, tzinfo=pytz.UTC)
+date3 = datetime(2021, 3, 1, 12, tzinfo=pytz.UTC)
 date2 = date3 - timedelta(minutes=20)
 date1 = date3 - timedelta(minutes=40)
 date0 = date3 - timedelta(minutes=60)

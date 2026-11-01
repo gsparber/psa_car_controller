@@ -224,8 +224,7 @@ class TestChargeControlStatus(unittest.TestCase):
                         outdated=True)
 
         with patch("psa_car_controller.psacc.application.charge_control.datetime") as mock_datetime:
-            mock_datetime.now.return_value = now
-            mock_datetime.utcnow.return_value = now
+            mock_datetime.now.side_effect = lambda tz=None: now.replace(tzinfo=tz)
             self.charge_control().process()
             self.remote.change_charge_hour.assert_not_called()
 
@@ -439,8 +438,7 @@ class TestChargeControlStatus(unittest.TestCase):
                 self.set_status(get_status(charging(status=status), minutes_old=600))
 
                 with patch("psa_car_controller.psacc.application.charge_control.datetime") as mock_datetime:
-                    mock_datetime.now.return_value = now
-                    mock_datetime.utcnow.return_value = now
+                    mock_datetime.now.side_effect = lambda tz=None: now.replace(tzinfo=tz)
                     self.charge_control().process()
 
                 self.assertEqual(0, self.stops())
@@ -452,8 +450,7 @@ class TestChargeControlStatus(unittest.TestCase):
         self.set_status(get_status(charging(status=STOPPED, next_delayed_time="PT12H10M"), minutes_old=600))
 
         with patch("psa_car_controller.psacc.application.charge_control.datetime") as mock_datetime:
-            mock_datetime.now.return_value = now
-            mock_datetime.utcnow.return_value = now
+            mock_datetime.now.side_effect = lambda tz=None: now.replace(tzinfo=tz)
             self.charge_control().process()
 
         self.remote.change_charge_hour.assert_called_once()

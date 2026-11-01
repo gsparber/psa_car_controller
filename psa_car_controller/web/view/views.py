@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Lock, RLock, Thread
 from typing import List
 from urllib.parse import parse_qs, urlparse
@@ -153,7 +153,8 @@ def create_callback():  # noqa: MC0001
         for changed_line in diff_data:
             if changed_line['column_name'] == 'price':
                 conn = Database.get_db()
-                charge = Charge(datetime.utcfromtimestamp(changed_line['start_at'] / 1000))
+                start_at = datetime.fromtimestamp(changed_line['start_at'] / 1000, timezone.utc)
+                charge = Charge(start_at.replace(tzinfo=None))
                 charge.price = changed_line['current_value']
                 if APP.myp.vehicles_list:
                     charge.vin = get_default_car().vin
