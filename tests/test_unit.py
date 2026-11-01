@@ -102,6 +102,11 @@ class TestUnit(unittest.TestCase):
         assert model.battery_power == 44
         assert model.abrp_name == "citroen:ec3:24:44"
 
+    def test_car_model_e_c3_2024(self):
+        model = CarModelRepository().find_model_by_vin("VR7CBZYAZR1234567")
+        assert model.name == "Citroën e-C3 IV (2024)"
+        assert model.battery_power == 44
+
     def test_car_model_e_3008_gt_2026(self):
         model = CarModelRepository().find_model_by_vin("VR3KCZKZXT1234567")
         assert model.name == "E-3008 GT"
@@ -365,7 +370,7 @@ class TestUnit(unittest.TestCase):
             return model.reg[5:8]
 
         models = CarModelRepository().models
-        self.assertEqual(len(models), 152)
+        self.assertEqual(len(models), 153)
         corrected = []
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cars.json")

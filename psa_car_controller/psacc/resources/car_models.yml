@@ -13,6 +13,13 @@
   reg: VR7CBZYA4T
   max_elec_consumption: 70
 - !ElecModel
+  name: Citroën e-C3 IV (2024)
+  battery_power: 44
+  fuel_capacity: 0
+  abrp_name: citroen:ec3:24:44
+  reg: VR7CBZYAZR
+  max_elec_consumption: 70
+- !ElecModel
   name: E-3008 GT
   battery_power: 73
   fuel_capacity: 0
