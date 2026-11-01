@@ -13,7 +13,7 @@ import plotly
 ROOT = Path(__file__).parent.parent
 ASSETS = ROOT / "psa_car_controller" / "web" / "assets"
 # seen working in a browser: the versions of poetry.lock, used by CI, and the newest ones the image can install
-CHECKED = {"dash": {"4.1.0", "4.2.0"}, "plotly": {"6.7.0", "6.9.0"}}
+CHECKED = {"dash": {"4.1.0", "4.2.0", "4.5.0"}, "plotly": {"6.7.0", "6.9.0"}}
 
 
 def package_file(package, *path):
