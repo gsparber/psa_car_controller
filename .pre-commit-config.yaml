@@ -1,12 +1,15 @@
 repos:
-    - repo: https://github.com/pre-commit/mirrors-autopep8
-      rev: 'v2.0.4'  # Use the sha / tag you want to point at
-      hooks:
-          - id: autopep8
-            language: system
-    -   repo: https://github.com/PyCQA/prospector
-        rev: v1.16.1 # The version of Prospector to use, if not 'master' for latest
+    -   repo: local
         hooks:
-        -   id: prospector
+        -   id: autopep8
+            name: autopep8
+            entry: autopep8 -i
             language: system
-            args: ["--without-tool", "dodgy"]
+            types: [python]
+            require_serial: true
+        # on the whole repository: given single files, prospector applies no ignore-paths
+        -   id: prospector
+            name: prospector
+            entry: prospector --without-tool dodgy
+            language: system
+            pass_filenames: false

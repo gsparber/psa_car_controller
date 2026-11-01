@@ -131,8 +131,8 @@ class Charging:
         return charge.mileage is not None and mileage is not None and mileage - charge.mileage > MIN_SLOW_GAP_KM
 
     @staticmethod
+    # pylint: disable-next=too-many-positional-arguments
     def _close_charge(conn, charge: Charge, car, charge_date, level, latitude,
-                      # pylint: disable=too-many-positional-arguments
                       longitude, country_code, mileage):
         """Network inside, so not under the write lock."""
         stop_at = charge_date
@@ -154,8 +154,8 @@ class Charging:
         Charging.update_chargings(conn, charge, car)
 
     @staticmethod
+    # pylint: disable-next=too-many-locals,too-many-positional-arguments
     def record_charging(car: Car, charging_status, charge_date: datetime, level, latitude,
-                        # pylint: disable=too-many-locals,too-many-positional-arguments
                         longitude, country_code, charging_mode, charging_rate, autonomy, mileage):
         conn = Database.get_db()
         charge_date = charge_date.replace(microsecond=0)

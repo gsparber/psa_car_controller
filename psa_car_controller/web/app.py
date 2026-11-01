@@ -179,8 +179,8 @@ def start_app(*args, **kwargs):
     run(config_flask(*args, **kwargs))
 
 
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
 def config_flask(title, base_path, debug: bool, host, port, reloader=False,
-                 # pylint: disable=too-many-arguments,too-many-positional-arguments
                  unminified=False, view="psa_car_controller.web.view.views"):
     global app, dash_app
     # The views bind app and dash_app when imported and register their routes and callbacks there, so a new app would

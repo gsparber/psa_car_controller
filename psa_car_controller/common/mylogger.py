@@ -23,8 +23,8 @@ class CustomLogger(logging.Logger):
             exc_info = True
         super()._log(level, msg, args, exc_info, extra, stack_info, stacklevel)
 
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
     def __new_style_log(self, level, msg, args, exc_info=None, extra=None,
-                        # pylint: disable=too-many-arguments,too-many-positional-arguments
                         stack_info=False, **kwargs):
         if kwargs.pop('style', "%") == "{":  # optional
             msg = msg.format(*args)
