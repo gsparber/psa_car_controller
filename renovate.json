@@ -55,7 +55,7 @@
       "matchManagers": [
         "github-actions"
       ],
-      "matchPackageNames": [
+      "matchDepNames": [
         "python"
       ],
       "allowedVersions": "/^3\\.11(\\.|$)/"
@@ -65,7 +65,7 @@
       "matchManagers": [
         "poetry"
       ],
-      "matchPackageNames": [
+      "matchDepNames": [
         "python"
       ],
       "enabled": false
