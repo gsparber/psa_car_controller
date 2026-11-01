@@ -283,7 +283,8 @@ class TestLanguageScript(unittest.TestCase):
             self.assertEqual([], self.run_js("sources()", browser=browser), browser)
 
     def test_separators_go_with_the_name_plotly_uses(self):
-        config = self.run_js("(() => { let config; window.Plotly = { setPlotConfig: value => { config = value } }; loaded(); return config })()")
+        config = self.run_js(
+            "(() => { let config; window.Plotly = { setPlotConfig: value => { config = value } }; loaded(); return config })()")
         self.assertEqual("de", config["locale"])
         self.assertEqual({"decimal": ",", "thousands": "\u00a0"}, config["locales"]["de"]["format"])
 
@@ -304,7 +305,8 @@ class TestLanguageScript(unittest.TestCase):
         self.assertEqual(1, self.run_js("psaccLanguage.set('de-DE'); psaccLanguage.set('de-AT'); added.length"))
 
     def test_new_choice_adds_its_file(self):
-        self.assertEqual(["/pre/assets/plotly-locales/plotly-locale-de.js", "/pre/assets/plotly-locales/plotly-locale-fr.js"],
+        self.assertEqual(["/pre/assets/plotly-locales/plotly-locale-de.js",
+                          "/pre/assets/plotly-locales/plotly-locale-fr.js"],
                          self.run_js("psaccLanguage.set('fr-FR'); sources()"))
 
     def test_plotly_gets_the_language_when_it_loads_and_on_a_change(self):
@@ -397,21 +399,23 @@ class TestRenderer(unittest.TestCase):
         self.assertEqual([0, 1, 1, "object"], self.run_js("window.psaccLanguage = {};"))
 
     def test_starts_when_the_promise_fails(self):
-        self.assertEqual([0, 1, 1, "object"], self.run_js("window.psaccLanguage = { ready: Promise.reject(new Error('x')) };"))
+        self.assertEqual([0, 1, 1, "object"], self.run_js(
+            "window.psaccLanguage = { ready: Promise.reject(new Error('x')) };"))
 
 
 @unittest.skipUnless(shutil.which("node"), "needs node")
 class TestClientsideFormats(unittest.TestCase):
     @staticmethod
     def run_js(expression, language_tag):
-        script = (f"globalThis.window = globalThis; globalThis.document = {{querySelector: () => null, addEventListener: () => {{}}}};"
-                  f"const vm = require('vm'), fs = require('fs');"
-                  f"vm.runInThisContext(fs.readFileSync({json.dumps(str(LANGUAGE_JS))}, 'utf8'));"
-                  f"delete globalThis.document; window.psaccLanguage.set({json.dumps(language_tag)});"
-                  f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
-                  f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
-        result = subprocess.run(["node", "-e", script], env={"TZ": "Europe/Vienna", "PATH": shutil.which("node").rsplit("/", 1)[0]},
-                                capture_output=True, text=True, check=True, timeout=30)
+        script = (
+            f"globalThis.window = globalThis; globalThis.document = {{querySelector: () => null, addEventListener: () => {{}}}};"
+            f"const vm = require('vm'), fs = require('fs');"
+            f"vm.runInThisContext(fs.readFileSync({json.dumps(str(LANGUAGE_JS))}, 'utf8'));"
+            f"delete globalThis.document; window.psaccLanguage.set({json.dumps(language_tag)});"
+            f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
+            f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
+        env = {"TZ": "Europe/Vienna", "PATH": shutil.which("node").rsplit("/", 1)[0]}
+        result = subprocess.run(["node", "-e", script], env=env, capture_output=True, text=True, check=True, timeout=30)
         return json.loads(result.stdout)
 
     def test_date(self):
@@ -425,7 +429,8 @@ class TestClientsideFormats(unittest.TestCase):
         self.assertEqual("00:30:00 30.10.2026", self.run_js(expression, "de-AT"))
 
     def test_updated_with_date(self):
-        self.assertRegex(self.run_js("localTimeText('2020-01-05T23:30:00Z', 'updated')", "de-AT"), r"^6\. Jän\.?,? 00:30$")
+        updated = self.run_js("localTimeText('2020-01-05T23:30:00Z', 'updated')", "de-AT")
+        self.assertRegex(updated, r"^6\. Jän\.?,? 00:30$")
 
     def test_number(self):
         self.assertEqual("1.234,50", self.run_js("numberText(1234.5, 2)", "de-DE"))
@@ -436,13 +441,15 @@ class TestClientsideFormats(unittest.TestCase):
         self.assertEqual(["6,30", "12.346"], self.run_js("[nbFormat(6.3), nbFormat(12345.6)]", "de-DE"))
 
     def test_separators_of_the_tables(self):
-        self.assertEqual({"decimal": ",", "group": ".", "symbol": ["", "\u00a0%"]}, self.run_js("tableLocale()", "de-DE"))
+        german = {"decimal": ",", "group": ".", "symbol": ["", "\u00a0%"]}
+        self.assertEqual(german, self.run_js("tableLocale()", "de-DE"))
         self.assertEqual({"decimal": ".", "group": ",", "symbol": ["", "%"]}, self.run_js("tableLocale()", "en-US"))
 
     def test_table_date_and_slider(self):
         table = "(() => { const d = {trips: [{a: '2026-10-29T23:30:00Z'}]}; addLocaleDate(d, {trips: ['a']}); return d.trips[0].a_str })()"
         self.assertEqual("30.10.2026, 00:30", self.run_js(table, "de-AT"))
-        self.assertEqual("30.10.26", self.run_js("localSliderMarks({1793316600: {label: 'x'}})[1793316600].label", "de-AT"))
+        mark = self.run_js("localSliderMarks({1793316600: {label: 'x'}})[1793316600].label", "de-AT")
+        self.assertEqual("30.10.26", mark)
 
     def test_page_numbers_are_filled_in(self):
         expression = """(() => {

@@ -255,7 +255,7 @@ class TestFilterMasksQueries(unittest.TestCase):
     def test_abrp_url(self):
         tlm = json.dumps({"lat": LATITUDE, "lon": LONGITUDE})
         prepared = requests.Request("POST", Abrp.url, params={"tlm": tlm, "token": TOKEN,
-                                                               "api_key": Abrp.api_key}).prepare()
+                                                              "api_key": Abrp.api_key}).prepare()
         text = SensitiveDataFilter().mask(f"Max retries exceeded with url: {prepared.url} (Caused by X('y'))")
         for leak in (TOKEN, Abrp.api_key, "48.137", "11.575"):
             self.assertNotIn(leak, text)

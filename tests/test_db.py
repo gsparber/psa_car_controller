@@ -47,9 +47,10 @@ class TestUnit(unittest.TestCase):
                     conn.executemany("INSERT INTO blobs VALUES (?)",
                                      [(os.urandom(4096),) for _ in range(3000)])
                 self.assertGreater(os.path.getsize(db_file + "-wal"), WAL_SIZE_LIMIT_IN_BYTES)
-                # the next write after the auto-checkpoint restarts the WAL and truncates it
+                # the next write after the auto-checkpoint restarts the WAL and truncates it; a small
+                # one, as with SQLITE_SECURE_DELETE (Debian, Ubuntu) a DELETE rewrites every page
                 with conn:
-                    conn.execute("DELETE FROM blobs")
+                    conn.execute("INSERT INTO blobs VALUES (zeroblob(1))")
                 self.assertLessEqual(os.path.getsize(db_file + "-wal"), WAL_SIZE_LIMIT_IN_BYTES)
             finally:
                 conn.close_db()

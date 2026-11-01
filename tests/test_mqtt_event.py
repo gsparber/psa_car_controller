@@ -22,7 +22,7 @@ REST_STATUS = {
                    "opening": [{"identifier": "Driver", "state": "Closed"},
                                {"identifier": "Trunk", "state": "Closed"}]},
     "preconditioning": {"airConditioning": {"createdAt": "2026-08-30T12:00:00Z",
-                                             "updatedAt": "2026-08-30T12:00:00Z", "status": "Disabled"}},
+                                            "updatedAt": "2026-08-30T12:00:00Z", "status": "Disabled"}},
 }
 PROGRAMS = {"program1": {"hour": 7, "minute": 30, "on": 1, "day": [1, 1, 1, 1, 1, 0, 0]}}
 

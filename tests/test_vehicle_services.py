@@ -121,7 +121,7 @@ class TestRights(unittest.TestCase):
         self.assertEqual({}, parse_rights({"services": []}))
         self.assertEqual({"A": {"name": None, "mqtt_services": []}},
                          parse_rights({"services": {"u": [None, "x", {"name": "no code"}, {"code": "A",
-                                                                                         "mqtt_services": "x"}]}}))
+                                                                                           "mqtt_services": "x"}]}}))
 
 
 class TestRawRightsLog(unittest.TestCase):
@@ -449,7 +449,8 @@ class TestHomePage(unittest.TestCase):
         self.assertNotIn("Private mode", text(page))
 
     def test_rights_never_hide_a_command(self):
-        # a code missing from the rights proves nothing, whatever the answer looks like: the car refuses what it can't do
+        # a code missing from the rights proves nothing, whatever the answer looks
+        # like: the car refuses what it can't do
         for answer in ({"services": {"u": [{"code": "RTP", "mqtt_services": ["ThermalPrecond"]}]}},
                        {"services": {"u": [{"code": "NAO01", "mqtt_services": ["DataCollect"]}]}},
                        {"services": {}}):

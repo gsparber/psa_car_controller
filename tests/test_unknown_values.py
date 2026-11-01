@@ -69,7 +69,8 @@ class TestServerNumbers(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "needs node")
 class TestCardNumbers(unittest.TestCase):
     def test_nb_format(self):
-        self.assertEqual(["–", "–", "–", "0.00"], run_js("[nbFormat(NaN), nbFormat(Infinity), nbFormat(-Infinity), nbFormat(0)]"))
+        self.assertEqual(["–", "–", "–", "0.00"], run_js(
+            "[nbFormat(NaN), nbFormat(Infinity), nbFormat(-Infinity), nbFormat(0)]"))
 
     def test_charge_in_progress_without_energy(self):
         values = cards({"trips": [], "chargings": [{"start_at": CHARGE["start_at"], "stop_at": None, "kw": None}]})
@@ -136,7 +137,8 @@ class TestCardNumbers(unittest.TestCase):
 
 class TestChargeRows(unittest.TestCase):
     def setUp(self):
-        self.running = {"start_at": START, "stop_at": None, "kw": None, "price": None, "start_level": 40, "end_level": None}
+        self.running = {"start_at": START, "stop_at": None, "kw": None, "price": None,
+                        "start_level": 40, "end_level": None}
 
     def test_charge_without_energy_is_not_0_kwh(self):
         rows = insights_data.charge_rows([self.running])

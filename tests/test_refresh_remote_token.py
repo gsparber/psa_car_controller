@@ -107,6 +107,7 @@ class TestRefreshRemoteToken(unittest.TestCase):
         # THEN the token is refreshed
         self.assertTrue(refreshed)
         remote_client.manager.refresh_token_now.assert_called_once()
+
     def test_refresh_failure_is_recorded_until_next_success(self):
         # GIVEN a remote client whose account token refresh is rate limited
         remote_client = get_remote_client()

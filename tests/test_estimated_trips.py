@@ -182,7 +182,8 @@ class ValuesTest(EstimatedTripTestCase):
     def test_hybrid_on_fuel(self):
         trips = self.trips((0 * MIN, 1000, 40, 50), (10 * MIN, 1015, 40, 49), (20 * MIN, 1030, 40, 48),
                            (GAP_END, 1060, 40, 45), (GAP_END + PARKED, 1060, 40, 45), vehicle=HYBRID)
-        self.assertEqual(round(100 * 3 * HYBRID.fuel_capacity / 100 / 30, 2), trips[1].get_info()["consumption_fuel_km"])
+        self.assertEqual(round(100 * 3 * HYBRID.fuel_capacity / 100 / 30, 2),
+                         trips[1].get_info()["consumption_fuel_km"])
 
 
 class ChargeInTheGapTest(EstimatedTripTestCase):
@@ -279,7 +280,8 @@ class RecordedChargeInTheGapTest(EstimatedTripTestCase):
 
     def test_charge_of_another_car_leaves_the_consumption(self):
         record(*self.POINTS)
-        self.assertTrue(self.gap_trip(self.FRAME_START + HOUR, self.FRAME_START + 2 * HOUR, "another").consumption_known)
+        gap_trip = self.gap_trip(self.FRAME_START + HOUR, self.FRAME_START + 2 * HOUR, "another")
+        self.assertTrue(gap_trip.consumption_known)
 
     def test_recorded_trips_keep_their_consumption(self):
         record(*self.POINTS)

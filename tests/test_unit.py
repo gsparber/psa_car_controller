@@ -125,7 +125,8 @@ class TestUnit(unittest.TestCase):
 
     def test_car_model_reg_is_a_plain_prefix(self):
         for model in CarModelRepository().models:
-            self.assertRegex(model.reg, r"^[A-Z0-9]+$", f"{model.name}: reg is compared with startswith, not as a regex")
+            self.assertRegex(model.reg, r"^[A-Z0-9]+$",
+                             f"{model.name}: reg is compared with startswith, not as a regex")
 
     def test_every_car_model_creates_a_car(self):
         for model in CarModelRepository().models:

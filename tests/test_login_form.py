@@ -70,7 +70,7 @@ class LoginFormTestCase(unittest.TestCase):
     def submit(self, **fields):
         values = {**VALID, **fields}
         result, stored, *_ = self.views.connectPSA(1, values["psa-app"], values["psa-email"], values["psa-password"],
-                                               values["psa-countrycode"])
+                                                   values["psa-countrycode"])
         if stored is no_update:
             return result
         wait_for_job(self.views.LOGIN_JOB)

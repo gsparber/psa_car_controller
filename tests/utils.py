@@ -31,7 +31,6 @@ def get_web_view(name):
         return importlib.import_module(module)
 
 
-
 def isolate_jobs(test_case):
     """Background jobs of a test stay in a registry of their own."""
     registry = jobs.JobRegistry()

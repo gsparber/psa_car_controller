@@ -80,7 +80,9 @@ def remote_state():
         return REMOTE_SETUP
     if remote.token_error == TOKEN_RATE_LIMITED:
         return REMOTE_PAUSED
-    if read(lambda: remote.mqtt_client.is_connected(), False) and remote.token_error is None:
+    # without the lambda, a client that isn't there yet would raise outside of read
+    connected = read(lambda: remote.mqtt_client.is_connected(), False)  # pylint: disable=unnecessary-lambda
+    if connected and remote.token_error is None:
         return REMOTE_OK
     return REMOTE_ERROR
 

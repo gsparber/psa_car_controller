@@ -432,11 +432,16 @@ class TestChargeControlStatus(unittest.TestCase):
         self.assertEqual(4, self.remote.wakeup.call_count)
 
     def test_parked_car_with_an_old_status_is_left_alone(self):
+        # not in the 30 minutes before HOUR, where a stopped car over the threshold is woken up to postpone it
+        now = datetime.now().replace(hour=12, minute=0)
         for status in (STOPPED, DISCONNECTED):
             with self.subTest(status=status):
                 self.set_status(get_status(charging(status=status), minutes_old=600))
 
-                self.charge_control().process()
+                with patch("psa_car_controller.psacc.application.charge_control.datetime") as mock_datetime:
+                    mock_datetime.now.return_value = now
+                    mock_datetime.utcnow.return_value = now
+                    self.charge_control().process()
 
                 self.assertEqual(0, self.stops())
                 self.remote.wakeup.assert_not_called()

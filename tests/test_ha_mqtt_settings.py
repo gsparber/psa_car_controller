@@ -264,7 +264,7 @@ class TestSaveAndReconnect(SettingsAppTestCase):
         self.save(base_topic="cars")
         with patch.object(self.app.home_assistant, "publish_all") as publish_all:
             self.app.home_assistant._on_connect(self.running()[0], None, None,
-                                                 ReasonCode(PacketTypes.CONNACK, "Success"), None)
+                                                ReasonCode(PacketTypes.CONNACK, "Success"), None)
         publish_all.assert_called_once()
 
     def test_same_values_dont_reconnect(self):

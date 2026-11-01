@@ -187,7 +187,8 @@ class TestPagesUnits(unittest.TestCase):
             for column in table.columns:
                 if "format" in column:
                     # the "$" of a specifier is the locale symbol, without one the table shows a dollar
-                    locale = {**(getattr(table, "locale_format", None) or {}), **column["format"].to_plotly_json()["locale"]}
+                    locale = {**(getattr(table, "locale_format", None) or {}),
+                              **column["format"].to_plotly_json()["locale"]}
                     self.assertIn("symbol", locale, f"{table.id}: {column['id']}")
                     self.assertEqual("", locale["symbol"][0], f"{table.id}: {column['id']}")
 

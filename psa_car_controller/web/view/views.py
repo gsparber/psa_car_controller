@@ -301,7 +301,7 @@ def _load_trips():
             cached_layout = None  # force regenerate layout
             figures.get_figures(car)
         except (ValueError, IndexError):
-            logger.error("update_trips (slider): %s", exc_info=True)
+            logger.error("update_trips (slider):", exc_info=True)
         except AttributeError:
             logger.debug("position table is probably empty :", exc_info=True)
 

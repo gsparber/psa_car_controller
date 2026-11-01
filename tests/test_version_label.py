@@ -75,7 +75,8 @@ class TestVersionLabel(unittest.TestCase):
                     self.assertNotIn("dev build", text(component))
 
     def test_a_release_ignores_the_git_state(self):
-        for component in (self.header("3.7.9", "v3.7.7-71-g49f88b8", REPO), self.more("3.7.9", "v3.7.7-71-g49f88b8", REPO)):
+        build = ("3.7.9", "v3.7.7-71-g49f88b8", REPO)
+        for component in (self.header(*build), self.more(*build)):
             self.assertEqual([RELEASES + "v3.7.9"], self.tag_links(component))
             self.assertIn("v3.7.9", text(component))
             self.assertNotIn("49f88b8", text(component))

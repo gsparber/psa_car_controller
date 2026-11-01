@@ -177,7 +177,8 @@ class TestClientside(unittest.TestCase):
         self.assertEqual(("", None), (row["stop_at_str"], row["stop_at"]))
 
     def test_slider_marks(self):
-        expression = ("localSliderMarks({1793316600: {label: 'x'}, 1793320200: {label: 'y'}, 1793323800: {label: 'z'}})")
+        expression = (
+            "localSliderMarks({1793316600: {label: 'x'}, 1793320200: {label: 'y'}, 1793323800: {label: 'z'}})")
         marks = self.run_js(expression, "America/New_York")
         self.assertRegex(marks["1793316600"]["label"], r"^2[0-9]/10/26 \d\dh\d\d$")
         self.assertIsNone(self.run_js("localSliderMarks(null)", "Europe/Vienna"))

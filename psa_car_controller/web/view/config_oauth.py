@@ -105,4 +105,4 @@ def finish_oauth(n_clicks, code, stored=None):
 
 
 poll_oauth = register_job_view(OAUTH_PREFIX, config_views.LOGIN_JOB, "finish-oauth", "oauth-result", render_oauth,
-                              config_views.LOGIN_LOST_MESSAGE)
+                               config_views.LOGIN_LOST_MESSAGE)

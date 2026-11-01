@@ -161,7 +161,8 @@ class TestPictureDoesNotHoldThePage(unittest.TestCase):
     def test_home_does_not_wait_for_psa(self):
         self.slow_psa()
         car = Car(self.VIN, "id", "Peugeot")
-        self.assertEqual([None], run_with_limit(lambda: self.home._picture(car), self.LIMIT_S))  # pylint: disable=protected-access
+        self.assertEqual([None], run_with_limit(
+            lambda: self.home._picture(car), self.LIMIT_S))  # pylint: disable=protected-access
 
     def test_route_asks_psa_once_when_it_is_down(self):
         """It asked on every request, past the wait after a failure Home keeps to."""

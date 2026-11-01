@@ -31,12 +31,13 @@ def walk(component):
 
 
 def run_js(expression, tag):
-    script = (f"globalThis.window = globalThis; globalThis.document = {{querySelector: () => null, addEventListener: () => {{}}}};"
-              f"const vm = require('vm'), fs = require('fs');"
-              f"vm.runInThisContext(fs.readFileSync({json.dumps(str(LANGUAGE_JS))}, 'utf8'));"
-              f"delete globalThis.document; window.psaccLanguage.set({json.dumps(tag)});"
-              f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
-              f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
+    script = (
+        f"globalThis.window = globalThis; globalThis.document = {{querySelector: () => null, addEventListener: () => {{}}}};"
+        f"const vm = require('vm'), fs = require('fs');"
+        f"vm.runInThisContext(fs.readFileSync({json.dumps(str(LANGUAGE_JS))}, 'utf8'));"
+        f"delete globalThis.document; window.psaccLanguage.set({json.dumps(tag)});"
+        f"vm.runInThisContext(fs.readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
+        f"console.log(JSON.stringify(eval({json.dumps(expression)})))")
     result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
     return json.loads(result.stdout)
 
@@ -185,7 +186,8 @@ class TestOneSourceOfSeparators(unittest.TestCase):
                                     ("de-DE", ",", ".")):
             with self.subTest(tag):
                 config = self.plotly_config(tag)
-                self.assertEqual({"decimal": decimal, "thousands": group}, config["locales"][config["locale"]]["format"])
+                self.assertEqual({"decimal": decimal, "thousands": group},
+                                 config["locales"][config["locale"]]["format"])
 
     def test_same_as_the_tables_and_the_numbers_on_the_page(self):
         for tag in ("de-AT", "de-CH", "en-US", "en-GB", "fr-FR", "es-ES", "nb-NO", "ja-JP"):

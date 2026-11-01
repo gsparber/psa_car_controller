@@ -71,7 +71,8 @@ def ask_worker(url=WORKER):
 
 class TestWorkerUrl(unittest.TestCase):
     def test_endpoint_is_added_once(self):
-        for url in ("https://w.example", "https://w.example/", "https://w.example/worker", " https://w.example/worker/ "):
+        urls = ("https://w.example", "https://w.example/", "https://w.example/worker", " https://w.example/worker/ ")
+        for url in urls:
             self.assertEqual("https://w.example/worker", worker_endpoint(url))
 
     def test_base_path_is_kept(self):

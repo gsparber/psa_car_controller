@@ -107,9 +107,10 @@ class TestMapStopped(unittest.TestCase):
     """fetchTile can't catch everything, and it catches nothing should the map no more use fetch: then it is said."""
 
     def test_page_listens_for_it(self):
-        script = (f"const heard = []; globalThis.window = {{console, addEventListener: (type, run) => heard.push([type, run.name])}};"
-                  f"require('vm').runInThisContext(require('fs').readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
-                  "console.log(JSON.stringify(heard))")
+        script = (
+            f"const heard = []; globalThis.window = {{console, addEventListener: (type, run) => heard.push([type, run.name])}};"
+            f"require('vm').runInThisContext(require('fs').readFileSync({json.dumps(str(CLIENTSIDE))}, 'utf8'));"
+            "console.log(JSON.stringify(heard))")
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
         self.assertIn(["unhandledrejection", "noteMapError"], json.loads(result.stdout))
 
@@ -289,7 +290,7 @@ class TestUpdateMap(StatsTest):
         map_layout = update_map(self.figure, [trip(1, [47.1], [-1.1])], [trip(2, [52.5], [13.4])], [],
                                 [trip(1, [47.1], [-1.1])], moved=USER_VIEW)["layout"]["map"]
         self.assertEqual(({"lat": 48, "lon": 2}, 7.5, 20, 30), (map_layout["center"], map_layout["zoom"],
-                                                               map_layout["bearing"], map_layout["pitch"]))
+                                                                map_layout["bearing"], map_layout["pitch"]))
 
     def test_user_view_comes_from_relayout_data(self):
         self.assertEqual(USER_VIEW, Clientside.run_js(f"userMapView({json.dumps(RELAYOUT)})", "UTC"))
@@ -339,7 +340,8 @@ class TestMapOnlyWithItsTabOpen(StatsTest):
         data = {"trips": list(trips), "chargings": []}
         return Clientside.run_js(
             "(() => { const log = console.log; console.log = () => {};"
-            f"dash_clientside = {{no_update: {json.dumps(self.SKIP)}, callback_context: {{triggered: {json.dumps(triggered)}}}}};"
+            f"dash_clientside = {{no_update: {json.dumps(self.SKIP)}, "
+            f"callback_context: {{triggered: {json.dumps(triggered)}}}}};"
             "globalThis.document = {getElementById: () => ({})};"  # the summary cards
             "const graph = {data: [{x: [], y: []}], layout: {}};"
             f"const figures = {{graph: [graph], maps: [{self.figure}]}};"

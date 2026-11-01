@@ -274,6 +274,7 @@ def parse_settings(form: dict, current: HomeAssistantMqttConfig) -> Tuple[Option
 class HomeAssistantMqtt:
     """MQTT discovery publisher and command receiver for Home Assistant."""
 
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     def __init__(self, config, psacc, charge_controls: Callable[[], object] = lambda: None,
                  remote_enabled: bool = True,
                  client_factory=lambda: mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)):

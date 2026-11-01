@@ -314,7 +314,8 @@ class TestSharedDatabase(unittest.TestCase):
         self.assertEqual(1, self.count_soh())
 
     def test_close_still_rolls_back_its_own_write(self):
-        self.conn.execute("INSERT INTO battery_soh(date, VIN, level) VALUES(?,?,?)", (datetime(2026, 1, 1), "VIN", 90.0))
+        self.conn.execute("INSERT INTO battery_soh(date, VIN, level) VALUES(?,?,?)",
+                          (datetime(2026, 1, 1), "VIN", 90.0))
         self.conn.close()
         self.assertEqual(0, self.count_soh())
 
