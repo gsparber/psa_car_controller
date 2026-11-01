@@ -4,6 +4,7 @@
     "config:best-practices",
     ":enablePreCommit"
   ],
+  "forkProcessing": "enabled",
   "timezone": "Europe/Vienna",
   "packageRules": [
     {
