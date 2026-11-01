@@ -1,0 +1,48 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":enablePreCommit"
+  ],
+  "timezone": "Europe/Vienna",
+  "packageRules": [
+    {
+      "groupName": "Docker image digest updates",
+      "schedule": [
+        "* 2-5 1,15 * *"
+      ],
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ]
+    },
+    {
+      "description": "Bundle Python minor and patch updates, every branch builds two images in ghcr-branch.yml",
+      "groupName": "python non-major",
+      "matchManagers": [
+        "poetry"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ]
+    },
+    {
+      "description": "pycryptodomex is pinned because minor versions break, see pyproject.toml",
+      "groupName": null,
+      "matchPackageNames": [
+        "pycryptodomex"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "docker-compose.yml is what users copy, keep it on the latest tag without a digest",
+      "matchManagers": [
+        "docker-compose"
+      ],
+      "enabled": false
+    }
+  ]
+}
