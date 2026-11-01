@@ -2,7 +2,7 @@ ARG PYTHON_DEP='python3 python3-pandas python3-six python3-dateutil python3-brot
 # python3-scipy depends on pythran, which pulls in gcc, g++ and boost; only the builder installs it
 ARG SCIPY_RUNTIME_DEP='python3-decorator libgfortran5 liblbfgsb0 libblas3 liblapack3'
 ARG DEBIAN_FRONTEND=noninteractive
-FROM debian:12-slim AS builder
+FROM debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS builder
 ARG PYTHON_DEP
 RUN  BUILD_DEP='python3-pip python3-setuptools python3-dev libblas-dev liblapack-dev gfortran libffi-dev libxml2-dev libxslt1-dev make automake gcc g++ subversion ninja-build' ; \
      apt-get update && apt-get install -y --no-install-recommends $BUILD_DEP $PYTHON_DEP python3-scipy;
@@ -14,7 +14,7 @@ RUN pip3 install --break-system-packages --no-cache-dir psa_car_controller-${PSA
     mkdir /scipy && cp -a /usr/lib/python3/dist-packages/scipy /usr/lib/python3/dist-packages/scipy-*.dist-info /scipy/
 EXPOSE 5000
 
-FROM debian:12-slim
+FROM debian:12-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 ARG PYTHON_DEP
 ARG SCIPY_RUNTIME_DEP
 WORKDIR /config
