@@ -4,8 +4,8 @@ import sys
 from threading import Thread
 
 DIR = os.path.dirname(os.path.realpath(__file__))
-if sys.version_info < (3, 7):
-    raise RuntimeError("This application requires Python 3.7+")
+if sys.version_info < (3, 13):
+    raise RuntimeError("This application requires Python 3.13+")
 
 # pylint: disable=wrong-import-position
 from psa_car_controller.psacc.application.car_controller import PSACarController

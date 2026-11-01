@@ -4,7 +4,7 @@
 
 1.2 Install requirements :
 
-- You need **python >= 3.7**
+- You need **python >= 3.13**
 
 - On debian based distribution you can install some requirement from repos, it's faster than installtion with pip: 
  
