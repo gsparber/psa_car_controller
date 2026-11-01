@@ -227,6 +227,7 @@ class ConfigRepository(BaseModel):
     def read_config(name=None) -> 'ConfigRepository':
         try:
             config_str = ConfigRepository._read_file(name)
+            # pylint: disable-next=abstract-class-instantiated  # false alarm on ConfigUpdater 4, it can be instantiated
             config = ConfigUpdater(allow_no_value=True)
             config.read_string(config_str)
             return ConfigRepository.config_file_to_dto(config)
@@ -237,6 +238,7 @@ class ConfigRepository(BaseModel):
 
     @staticmethod
     def get_default_config():
+        # pylint: disable-next=abstract-class-instantiated  # see read_config
         config = ConfigUpdater(allow_no_value=True)
         config.read_string(DEFAULT_CONFIG)
         return config
