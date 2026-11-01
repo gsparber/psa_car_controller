@@ -19,10 +19,18 @@ env:
   IMAGE_NAME: psa_car_controller
 
 jobs:
+  # no image of a commit which fails its tests; test.yml doesn't run on these pushes itself
+  test:
+    uses: ./.github/workflows/test.yml
+    secrets: inherit
+    permissions:
+      contents: read
+
   # each platform builds on a native runner: arm64 under QEMU took well over 25 min
   # (scipy, pandas and playwright emulated), natively it is as fast as amd64
   build:
     name: Build ${{ matrix.platform }}
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

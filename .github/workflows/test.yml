@@ -1,9 +1,11 @@
 name: test
 on:
+  # the other branches run it through ghcr-branch.yml, before their image
   push:
-    branches: [ master, develop, next ]
+    branches: [ master ]
   pull_request:
     branches: [ master, next ]
+  workflow_call:
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
