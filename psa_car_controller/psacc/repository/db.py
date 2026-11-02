@@ -1,12 +1,11 @@
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import islice
 from threading import Lock, RLock
 from time import sleep
 
 from typing import Callable, List
-import pytz
 import requests
 
 from geojson import Feature, Point, FeatureCollection
@@ -136,7 +135,7 @@ class Database:
 
     @staticmethod
     def convert_datetime_to_string(date: datetime):
-        return date.replace(tzinfo=pytz.UTC).isoformat(timespec='seconds', sep=" ")
+        return date.replace(tzinfo=UTC).isoformat(timespec='seconds', sep=" ")
 
     @staticmethod
     def set_db_callback(callbackfct):

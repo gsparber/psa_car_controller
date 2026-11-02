@@ -1,11 +1,10 @@
 import typing
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import dash_bootstrap_components as dbc
 from dash import html
 from dash.development.base_component import Component
 from pandas import DataFrame
-from pytz import UTC
 
 
 def unix_time_millis(date):

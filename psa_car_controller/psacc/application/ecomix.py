@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from statistics import mean, StatisticsError
 import xml.etree.ElementTree as ElT
 import numbers
@@ -7,7 +7,6 @@ from typing import Union
 
 import requests
 import reverse_geocode
-from pytz import UTC
 from requests import RequestException
 
 CO2_SIGNAL_REQ_INTERVAL = 600

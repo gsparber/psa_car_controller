@@ -6,7 +6,7 @@ import os
 import shutil
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import reverse_geocode
@@ -14,7 +14,6 @@ import ruamel.yaml
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509 import load_pem_x509_certificate
 from dateutil.tz import tzutc
-from pytz import UTC
 
 from psa_car_controller import psa
 from psa_car_controller.common import utils

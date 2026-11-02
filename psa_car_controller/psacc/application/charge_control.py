@@ -2,11 +2,10 @@ import json
 import logging
 import threading
 from copy import copy
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from hashlib import md5
 from time import sleep
 
-import pytz
 
 from psa_car_controller.psa.constants import DISCONNECTED, INPROGRESS, FINISHED, STOPPED
 from psa_car_controller.psa.mqtt_event import mqtt_charging_status
@@ -87,7 +86,7 @@ class ChargeControl:
         last_update = vehicle_status.get_energy('Electric').updated_at
         if last_update is None:
             return float('inf')
-        return (datetime.now(pytz.UTC) - last_update).total_seconds() / 60
+        return (datetime.now(UTC) - last_update).total_seconds() / 60
 
     def _charge_status_stale(self, vehicle_status, status):
         """The API answers but the charging car doesn't: as outdated as when the API fails."""
@@ -100,7 +99,7 @@ class ChargeControl:
         # force update if the car doesn't send info during wakeup_interval() minutes. The time of
         # the last wakeup counts too: a car which doesn't answer keeps the old updated_at, so it was
         # woken up again on every refresh until the wakeup rate limit stopped it (#1130).
-        now = datetime.now(pytz.UTC)
+        now = datetime.now(UTC)
         minutes_since_update = self._minutes_since_update(vehicle_status)
         interval = self.wakeup_interval(vehicle_status, minutes_since_update)
         if outdated:
