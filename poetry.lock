@@ -897,21 +897,6 @@ dash = ">=3.0.4"
 pandas = ["numpy (>=2.0.2)", "pandas (>=2.2.3)"]
 
 [[package]]
-name = "dash-daq"
-version = "0.6.0"
-description = "DAQ components for Dash"
-optional = false
-python-versions = "*"
-groups = ["main"]
-files = [
-    {file = "dash_daq-0.6.0-py3-none-any.whl", hash = "sha256:d155b5586f164d5d4379d5999275759c525b764a1eb5313a34abce13c50aa856"},
-    {file = "dash_daq-0.6.0.tar.gz", hash = "sha256:ae2568aca470b186d6805ff2317a932a6c1a5ed879fe33e525e43810fc354dce"},
-]
-
-[package.dependencies]
-dash = ">=1.6.1"
-
-[[package]]
 name = "dataset"
 version = "2.0.0"
 description = "Toolkit for Python-based database access."
@@ -3587,4 +3572,4 @@ type = ["pytest-mypy (>=1.0.1) ; platform_python_implementation != \"PyPy\""]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13, <4.0.0"
-content-hash = "fa1727ed4bbe7fecd07c58fad2e091356e8f4167f62750b05f72e05d748e7caa"
+content-hash = "3580943f4f57b850e3bc92e03db5a64def76681ca9b3527e380a0a97d14a35f7"

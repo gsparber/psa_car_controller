@@ -1,5 +1,4 @@
 import dash_bootstrap_components as dbc
-import dash_daq as daq
 from dash import html
 from dash.dependencies import Input
 from dash.exceptions import PreventUpdate
@@ -25,7 +24,7 @@ class Switch(Button):
                           prevent_initial_call=prevent_initial_call)(self.call)
 
     def get_html(self):
-        return dbc.Col([daq.ToggleSwitch(  # pylint: disable=not-callable
+        return dbc.Col([dbc.Switch(
             id=self.get_button_id(),
             value=self.value,
             label=self.label
