@@ -1,20 +1,30 @@
+# TODO before merging upstream: the image goes to the GHCR of this fork. Change push_to_registry back to Docker Hub:
+# its name, DOCKER_IMAGE, the login with DOCKER_USERNAME and DOCKER_PASSWORD, and drop its packages permission.
+# PyPI and psacc-ha only run in flobz/psa_car_controller, they need no change.
 name: Publish Docker image and pypi package
 on:
   push:
     tags:
      - 'v*.*.*'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   test:
     uses: ./.github/workflows/test.yml
     secrets: inherit
 
   create_release:
-    name: Push to pypi
+    name: Build the wheel, push it to pypi upstream
     needs: test
     runs-on: ubuntu-latest
     steps:
      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+       with:
+        # git describe needs the tags, also when started by hand from a branch
+        fetch-depth: 0
      - name: Set up Python
        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
        with:
@@ -23,27 +33,36 @@ jobs:
        run: |
          python -m pip install --upgrade pip
          pip install poetry
-         sudo apt-get install libblas3 liblapack3 liblapack-dev libblas-dev gfortran libatlas-base-dev
-     - name: Build and publish
+     - name: Build
+       id: build
        run: |
-         export PSACC_VERSION=$(git describe --tags --abbrev=0)
-         poetry version ${PSACC_VERSION}
+         PSACC_VERSION=$(git describe --tags --abbrev=0)
+         poetry version "${PSACC_VERSION}"
          poetry build
-         poetry publish --username __token__ --password ${{ secrets.PYPI_TOKEN }}
-         mv dist/psa_car_controller-${PSACC_VERSION:1}-py3-none-any.whl dist/psa_car_controller-0.0.0-py3-none-any.whl
+         echo "version=${PSACC_VERSION:1}" >> "$GITHUB_OUTPUT"
+     - name: Publish
+       if: github.repository == 'flobz/psa_car_controller'
+       env:
+         POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
+       run: poetry publish
+     - name: Name the wheel for the Dockerfile
+       run: mv "dist/psa_car_controller-${{ steps.build.outputs.version }}-py3-none-any.whl" dist/psa_car_controller-0.0.0-py3-none-any.whl
      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
        with:
          name: wheel-package
          path: dist/psa_car_controller-0.0.0-py3-none-any.whl
   push_to_registry:
     needs: create_release
-    name: Push Docker image to Docker Hub
+    name: Push Docker image to GHCR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Prepare
         id: prep
         run: |
-          DOCKER_IMAGE=flobz/psa_car_controller
+          DOCKER_IMAGE=ghcr.io/$(echo "${{ github.repository_owner }}/psa_car_controller" | tr '[:upper:]' '[:lower:]')
           VERSION=edge
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
@@ -53,7 +72,7 @@ jobs:
           else
             TAGS="${DOCKER_IMAGE}:${VERSION}"
           fi
-          echo ::set-output name=tags::${TAGS}
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
         with:
@@ -66,12 +85,13 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: wheel-package
-          path: dist/psa_car_controller-0.0.0-py3-none-any.whl
-      - name: Login to DockerHub
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4 
+          path: dist
+      - name: Login to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       -
         name: Build and push
         id: docker_build
@@ -89,7 +109,7 @@ jobs:
     needs: push_to_registry
     name: Update psacc-ha version
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'b')
+    if: github.repository == 'flobz/psa_car_controller' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'b')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/update-ha-config
@@ -103,7 +123,7 @@ jobs:
     needs: push_to_registry
     name: Update psacc-ha beta version
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'b')
+    if: github.repository == 'flobz/psa_car_controller' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref, 'b')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/update-ha-config
