@@ -7,7 +7,7 @@ from functools import wraps
 from flask import abort, jsonify, make_response, request, send_file, Response as FlaskResponse
 from pydantic import BaseModel
 
-from oauth2_client.credentials_manager import OAuthError
+from psa_car_controller.psa.oauth2_client import OAuthError
 
 from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException, \
     validate_preconditioning_programs

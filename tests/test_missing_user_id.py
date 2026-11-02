@@ -10,7 +10,7 @@ from http import HTTPStatus
 from unittest.mock import MagicMock, patch
 
 import requests
-from oauth2_client.credentials_manager import OAuthError
+from psa_car_controller.psa.oauth2_client import OAuthError
 
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.constants import BRAND

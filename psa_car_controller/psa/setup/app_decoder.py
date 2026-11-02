@@ -7,7 +7,7 @@ from os import path
 from typing import Optional
 
 import requests
-from oauth2_client.credentials_manager import OAuthError
+from psa_car_controller.psa.oauth2_client import OAuthError
 
 from psa_car_controller.common.sensitive_filter import MASK, sensitive_filter
 from psa_car_controller.common.utils import RateLimitException

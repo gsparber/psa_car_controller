@@ -6,7 +6,7 @@ import unittest
 from http import HTTPStatus
 from unittest.mock import DEFAULT, MagicMock, patch
 
-from oauth2_client.credentials_manager import OAuthError, ServiceInformation
+from psa_car_controller.psa.oauth2_client import OAuthError, ServiceInformation
 from requests import RequestException, Response
 
 from psa_car_controller.common.utils import RateLimitException
@@ -319,7 +319,7 @@ class TestRefreshInsideARequest(unittest.TestCase):
         manager = get_manager()
         sent = fake_api(manager)
         rejection = answer(400, {"error": "invalid_grant", "error_description": "grant is invalid"})
-        with unlimited(manager), patch("oauth2_client.credentials_manager.requests.post",
+        with unlimited(manager), patch("psa_car_controller.psa.oauth2_client.requests.post",
                                        return_value=rejection) as token_endpoint:
             self.assertFalse(manager.refresh_token_now())
             with self.assertRaises(OAuthError) as raised:
@@ -363,7 +363,7 @@ class TestRefreshInsideARequest(unittest.TestCase):
         saved = []
         manager.refresh_callbacks.append(lambda: saved.append(manager.refresh_token))
         tokens = answer(200, {"access_token": "new-access-token", "refresh_token": "new-refresh-token"})
-        with unlimited(manager), patch("oauth2_client.credentials_manager.requests.post", return_value=tokens):
+        with unlimited(manager), patch("psa_car_controller.psa.oauth2_client.requests.post", return_value=tokens):
             self.assertEqual(200, manager.post("https://api.invalid/token").status_code)
         self.assertEqual("new-refresh-token", manager.refresh_token)
         self.assertEqual(["new-refresh-token"], saved)

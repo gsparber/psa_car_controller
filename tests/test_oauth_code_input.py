@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 from urllib.parse import quote
 
-from oauth2_client.credentials_manager import ServiceInformation
+from psa_car_controller.psa.oauth2_client import ServiceInformation
 
 from psa_car_controller.psa.oauth import OpenIdCredentialManager, extract_code
 from tests.utils import get_web_view, isolate_jobs, wait_for_job

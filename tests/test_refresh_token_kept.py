@@ -12,7 +12,7 @@ import unittest
 from http import HTTPStatus
 from unittest.mock import MagicMock, patch
 
-from oauth2_client.credentials_manager import OAuthError, ServiceInformation
+from psa_car_controller.psa.oauth2_client import OAuthError, ServiceInformation
 from requests import RequestException, Response
 
 from psa_car_controller.common.utils import AuthenticationRequiredException
@@ -44,10 +44,10 @@ def token_answer(status: int, body) -> Response:
 
 def refresh(manager: OpenIdCredentialManager, status: int, body):
     # the real library code down to the HTTP call, without the rate limit shared by the test run
-    with patch("oauth2_client.credentials_manager.requests.post", return_value=token_answer(status, body)) as post, \
+    with patch("psa_car_controller.psa.oauth2_client.requests.post", return_value=token_answer(status, body)) as post, \
             patch.object(manager, "_refresh_with_retries",
                          lambda: OpenIdCredentialManager._refresh_with_retries.__wrapped__(manager)), \
-            patch("oauth2_client.credentials_manager._logger"):
+            patch("psa_car_controller.psa.oauth2_client._logger"):
         return manager.refresh_token_now(), post
 
 
@@ -100,9 +100,9 @@ class TestTemporaryRefusal(unittest.TestCase):
     def test_the_scheduled_refresh_keeps_trying(self):
         manager = get_manager()
         manager._scheduled_refresh = True
-        with patch("oauth2_client.credentials_manager.requests.post",
+        with patch("psa_car_controller.psa.oauth2_client.requests.post",
                    return_value=token_answer(401, {"error": "invalid_client"})), \
-                patch("oauth2_client.credentials_manager._logger"), \
+                patch("psa_car_controller.psa.oauth2_client._logger"), \
                 patch.object(manager, "_refresh_with_retries",
                              lambda: OpenIdCredentialManager._refresh_with_retries.__wrapped__(manager)), \
                 patch.object(manager, "_schedule_refresh") as schedule:

@@ -7,7 +7,7 @@ from hashlib import md5
 from sqlite3.dbapi2 import IntegrityError
 from typing import Optional
 
-from oauth2_client.credentials_manager import ServiceInformation
+from psa_car_controller.psa.oauth2_client import ServiceInformation
 from urllib3.exceptions import HTTPError
 
 from psa_car_controller.psa.connected_car_api.api.vehicles_api import VehiclesApi

@@ -1,0 +1,4 @@
+geonames_towns.npz: the towns of GeoNames cities1000 (https://www.geonames.org/), as reverse_geocode 1.6.6 ships
+them in geocode.gz. Only latitude and longitude (in 1/100000 degrees) and the country code are kept.
+
+GeoNames data is licensed under the Creative Commons Attribution 4.0 License (https://creativecommons.org/licenses/by/4.0/).

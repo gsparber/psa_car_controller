@@ -9,7 +9,7 @@ import unittest
 from http import HTTPStatus
 from unittest.mock import MagicMock, patch
 
-from oauth2_client.credentials_manager import OAuthError, ServiceInformation
+from psa_car_controller.psa.oauth2_client import OAuthError, ServiceInformation
 from requests import RequestException
 
 from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException

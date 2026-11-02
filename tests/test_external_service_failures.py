@@ -235,7 +235,7 @@ class TestOtherServices(LogCapture):
             self.assertIsNone(Ecomix.get_data_france(now - timedelta(hours=1), now))
 
     def test_position_isnt_logged_when_the_country_is_unknown(self):
-        with patch("psa_car_controller.psacc.application.ecomix.reverse_geocode.search", side_effect=IndexError):
+        with patch("psa_car_controller.psacc.application.ecomix.country_of", side_effect=ValueError):
             self.assertEqual("FR", Ecomix.get_country(LATITUDE, LONGITUDE, "FR"))
         self.assert_no_leak()
 

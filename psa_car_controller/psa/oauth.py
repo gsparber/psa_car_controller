@@ -14,7 +14,7 @@ from http import HTTPStatus
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from oauth2_client.credentials_manager import CredentialManager, OAuthError, ServiceInformation
+from psa_car_controller.psa.oauth2_client import CredentialManager, OAuthError, ServiceInformation
 from requests import Response, RequestException
 
 from psa_car_controller.common.utils import rate_limit, RateLimitException, TIMEOUT_IN_S

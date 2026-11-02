@@ -6,8 +6,9 @@ import numbers
 from typing import Union
 
 import requests
-import reverse_geocode
 from requests import RequestException
+
+from psa_car_controller.psacc.repository.country import country_code as country_of
 
 CO2_SIGNAL_REQ_INTERVAL = 600
 CO2_SIGNAL_URL = "https://api.electricitymaps.com"
@@ -126,10 +127,8 @@ class Ecomix:
     @staticmethod
     def get_country(latitude, longitude, country_code_default):
         try:
-            location = reverse_geocode.search([(latitude, longitude)])[0]
-            country_code = location["country_code"]
-            return country_code
-        except (UnicodeDecodeError, IndexError, ValueError):
+            return country_of(latitude, longitude)
+        except (TypeError, ValueError):
             logger.error("Can't find the country of the car")
             # return None
             country_code = country_code_default

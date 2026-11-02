@@ -9,7 +9,7 @@ from os import environ
 from typing import Callable, List, Optional
 
 import paho.mqtt.client as mqtt
-from oauth2_client.credentials_manager import OAuthError
+from psa_car_controller.psa.oauth2_client import OAuthError
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.reasoncodes import ReasonCode
 from requests import RequestException, Timeout

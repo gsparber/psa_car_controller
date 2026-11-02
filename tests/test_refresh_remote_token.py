@@ -4,7 +4,7 @@ from http import HTTPStatus
 from unittest.mock import MagicMock
 from unittest import mock
 
-from oauth2_client.credentials_manager import OAuthError
+from psa_car_controller.psa.oauth2_client import OAuthError
 
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.RemoteClient import KEEPALIVE_PERIOD, KEEPALIVE_RETRY_PERIOD, MAX_REFRESH_DELAY, \

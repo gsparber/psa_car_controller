@@ -9,7 +9,6 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import reverse_geocode
 import ruamel.yaml
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.x509 import load_pem_x509_certificate
@@ -36,6 +35,7 @@ from psa_car_controller.psacc.model.trip import Trip
 from psa_car_controller.psacc.repository import config_repository
 from psa_car_controller.psacc.repository.car_model import CarModelRepository
 from psa_car_controller.psacc.repository.config_repository import ConfigRepository
+from psa_car_controller.psacc.repository.country import country_code
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.repository.trips import Trips
 from psa_car_controller.psacc.utils.utils import get_temp
@@ -570,13 +570,13 @@ class TestUnit(unittest.TestCase):
     def test_sdk(self):
         api = ApiClient()
         status: psa.connected_car_api.models.status.Status = api._ApiClient__deserialize(FUEL_CAR_STATUS, "Status")
-        geocode_res = reverse_geocode.search([(status.last_position.geometry.coordinates[:2])[::-1]])[0]
+        longitude, latitude = status.last_position.geometry.coordinates[:2]
         get_new_test_db()
         car = Car("XX", "vid", "Peugeot")
         car.status = status
         myp = PSAClient.load_config(DATA_DIR + "config.json")
         myp.record_info(car)
-        assert geocode_res["country_code"] == "DE"
+        assert country_code(latitude, longitude) == "DE"
         assert "features" in json.loads(Database.get_recorded_position())
         # electric should be first
         assert car.status.energy[0].type == 'Electric'
