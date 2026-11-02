@@ -491,6 +491,19 @@ try:
 except (IndexError, TypeError, AttributeError):
     logger.error("Failed to get trips, there is probably not enough data yet:", exc_info=True)
 
+
+def register_control_buttons():
+    """A button registers its callback when built, which a page opened right after the start only learns of when
+    reloaded: until then its switches move without sending anything. Without the callbacks no page works at all."""
+    if APP.is_good:
+        try:
+            get_control_tabs(APP)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.exception("Can't register the buttons of the control page:")
+
+
+dash_app.before_dependencies = register_control_buttons
+
 dash_app.layout = dbc.Container(fluid=True, children=[dcc.Location(id='url', refresh=False),
                                                       html.Div(id='page-content'),
                                                       pending_store(),

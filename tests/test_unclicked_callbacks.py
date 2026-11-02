@@ -102,6 +102,30 @@ class TestControlButtons(unittest.TestCase):
         self.button, self.switch = control.Button, control.Switch
         self.fct = MagicMock()
 
+    def test_a_page_knows_the_buttons_of_the_control_page_at_its_start(self):
+        views = get_web_view("views")
+
+        def build(_config):
+            self.switch("t32-switch", "first-page", "Label", self.fct, False)
+
+        with patch.object(views.APP, "is_good", True), patch.object(views, "get_control_tabs", build):
+            self.assertEqual("t32-switch-first-page-response.children",
+                             callback_of("t32-switch-first-page-response.children")["output"])
+
+    def test_a_failing_control_page_leaves_the_other_callbacks(self):
+        views = get_web_view("views")
+        with patch.object(views.APP, "is_good", True), \
+                patch.object(views, "get_control_tabs", side_effect=AttributeError("no client")), \
+                self.assertLogs(views.logger, "ERROR"):
+            response = web_app.app.test_client().get("/_dash-dependencies")
+        self.assertEqual(200, response.status_code)
+
+    def test_no_buttons_before_the_login(self):
+        views = get_web_view("views")
+        with patch.object(views.APP, "is_good", False), patch.object(views, "get_control_tabs") as build:
+            web_app.app.test_client().get("/_dash-dependencies")
+        build.assert_not_called()
+
     def test_button_needs_a_click(self):
         button = self.button("t71-button", "needs-click", "Label", self.fct)
         for clicks in (None, 0):

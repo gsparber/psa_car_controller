@@ -112,11 +112,19 @@ class PwaDash(Dash):
     """Dash app that links the web app manifest and icons, so phones can install it to the home screen.
     Links go through get_asset_url so they follow the per request prefix (HA ingress, reverse proxy)."""
 
+    # called when a page asks for the callbacks, which it does once at its start
+    before_dependencies = None
+
     def __init__(self, *args, **kwargs):
         self._setup_lock = threading.Lock()
         super().__init__(*args, **kwargs)
         self.config = RequestPrefixConfig(self.config)
         self.renderer = RENDERER
+
+    def dependencies(self):
+        if self.before_dependencies is not None:
+            self.before_dependencies()
+        return super().dependencies()
 
     def _setup_server(self):
         # Dash marks the setup as done when it starts it: a parallel first request would run on a half-built app
