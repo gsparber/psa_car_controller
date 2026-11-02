@@ -8,8 +8,9 @@ RUN  BUILD_DEP='python3-pip python3-setuptools python3-dev libblas-dev liblapack
      apt-get update && apt-get install -y --no-install-recommends $BUILD_DEP $PYTHON_DEP python3-scipy;
 ARG PSACC_VERSION="0.0.0"
 RUN pip3 install --break-system-packages --ignore-installed --upgrade pip wheel setuptools typing_extensions
-COPY ./dist/psa_car_controller-${PSACC_VERSION}-py3-none-any.whl .
-RUN pip3 install --break-system-packages --no-cache-dir psa_car_controller-${PSACC_VERSION}-py3-none-any.whl && \
+COPY ./dist/psa_car_controller-${PSACC_VERSION}-py3-none-any.whl ./poetry.lock ./docker_files/lock_constraints.py ./
+RUN python3 lock_constraints.py poetry.lock > constraints.txt && \
+    pip3 install --break-system-packages --no-cache-dir --constraint constraints.txt psa_car_controller-${PSACC_VERSION}-py3-none-any.whl && \
     python3 -m pip uninstall -y --break-system-packages pip wheel setuptools && \
     mkdir /scipy && cp -a /usr/lib/python3/dist-packages/scipy /usr/lib/python3/dist-packages/scipy-*.dist-info /scipy/
 EXPOSE 5000
