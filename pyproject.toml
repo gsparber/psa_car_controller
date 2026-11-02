@@ -35,7 +35,7 @@ certifi = ">=2026.10.19"
 six = ">=1.10"
 python-dateutil = ">=2.5.3"
 urllib3 = ">=2.0.0, <3.0.0"
-pandas = ">=2.2.3, <3.0.0"  # 2.2.3 is the one of Debian 13, the image uses it
+pandas = ">=3.1.0, <3.2.0"  # 2.2.3 is the one of Debian 13, the image uses it
 numpy = ">=2.0.0"
 scipy = ">=1.9.2"
 
