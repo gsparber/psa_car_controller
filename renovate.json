@@ -107,6 +107,19 @@
       "dependencyDashboardApproval": true
     },
     {
+      "description": "plotly 7 brings plotly.js 4: the language files and the fetch of the map tiles depend on its major (U26)",
+      "matchManagers": [
+        "poetry"
+      ],
+      "matchPackageNames": [
+        "plotly"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "docker-compose.yml is what users copy, keep it on the latest tag without a digest",
       "matchManagers": [
         "docker-compose"
