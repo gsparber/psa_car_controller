@@ -13,7 +13,7 @@ import plotly
 ROOT = Path(__file__).parent.parent
 ASSETS = ROOT / "psa_car_controller" / "web" / "assets"
 # seen working in a browser: the versions of poetry.lock, used by CI, and the newest ones the image can install
-CHECKED = {"dash": {"4.1.0", "4.2.0", "4.5.0"}, "plotly": {"6.7.0", "6.9.0"}}
+CHECKED = {"dash": {"4.1.0", "4.2.0", "4.5.0"}, "plotly": {"7.1.0"}}
 
 
 def package_file(package, *path):
@@ -34,7 +34,7 @@ class TestVersions(unittest.TestCase):
     def test_project_stays_on_the_major_versions(self):
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('dash = ">=4.0.0, <5.0.0"', project)
-        self.assertIn('plotly = "^6.', project)
+        self.assertIn('plotly = "^7.', project)
 
 
 class TestDash(unittest.TestCase):
@@ -84,8 +84,8 @@ class TestPlotly(unittest.TestCase):
 
     def test_map_loads_with_the_fetch_of_the_page(self):
         """fetchTile replaces window.fetch. MapLibre falls back to XMLHttpRequest, then a refused tile stops the map."""
-        self.assertRegex(self.source, r'Object\.prototype\.hasOwnProperty\.call\(Request\.prototype,"signal"\)\)return')
-        self.assertRegex(self.source, r"new Request\(W\.url.{0,700}\b(?:yield|await) fetch\(")
+        self.assertRegex(self.source, r'Object\.hasOwn\(Request\.prototype,"signal"\)\)return')
+        self.assertRegex(self.source, r"new Request\(\w+\.url.{0,700}\b(?:yield|await) fetch\(")
 
     def test_tile_of_our_style_is_seen_as_a_tile(self):
         clientside = (ASSETS / "clientside.js").read_text(encoding="utf-8")

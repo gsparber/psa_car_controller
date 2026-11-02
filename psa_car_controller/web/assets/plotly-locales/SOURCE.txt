@@ -1,1 +1,1 @@
-plotly.js 3.7.0, dist/plotly-locale-*.js of the npm package, MIT (LICENSE.txt). Only the language in use is loaded.
+plotly.js 4.1.1, dist/plotly-locale-*.js of the npm package, MIT (LICENSE.txt). Only the language in use is loaded.
