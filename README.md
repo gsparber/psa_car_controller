@@ -1,9 +1,87 @@
-# Remote Control of PSA car
+# Remote Control of PSA car: NEXT version, work in progress
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/4b4b98fe6dc04956a1c9a07b97c46c06)](https://app.codacy.com/gh/flobz/psa_car_controller?utm_source=github.com&utm_medium=referral&utm_content=flobz/psa_car_controller&utm_campaign=Badge_Grade_Settings)
 [![Codacy Badge](https://app.codacy.com/project/badge/Coverage/f4082f146ad044bb900e1683035a540b)](https://www.codacy.com/gh/flobz/psa_car_controller/dashboard?utm_source=github.com&utm_medium=referral&utm_content=flobz/psa_car_controller&utm_campaign=Badge_Coverage)
 [![Publish Docker image](https://github.com/flobz/psa_car_controller/actions/workflows/Docker_build.yml/badge.svg?branch=master)](https://hub.docker.com/repository/docker/flobz/psa_car_controller)
 [![Donate](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://www.paypal.com/donate?hosted_button_id=SM652WPXFNCXS)
-### This is a Python program to control and get information from a PSA car.
+
+> **Please [test this version](#how-to-test-next) and [send your feedback](https://github.com/gsparber/psa_car_controller/issues).** So far it has only been tested with an Opel Mokka-e.
+
+<p align="center">
+  <img src="docs/media/demo-mobile-light.gif" width="300" alt="Phone view in light mode: climate and charging started remotely, then the automatic stop, the climate schedules and the insights">
+  <img src="docs/media/demo-mobile-dark.gif" width="300" alt="The same tour of the phone view in dark mode">
+</p>
+<p align="center"><em>Demo data, simulated car.</em></p>
+
+## How to test `next`
+
+`next` is a test version in Docker, for amd64 and arm64. There is no image for 32-bit Raspberry Pi, and the Home Assistant add-on can't use it yet.
+
+Keep your config folder: you need no new login or SMS activation. Never run two instances on the same config, they would share the same tokens. The web pages and the API have no login, so keep port 5000 inside your LAN.
+
+**Known issue:** the home page fails while the car is charging and reports a charging rate. The other pages keep working.
+
+### 1. Back up first
+
+Stop the container and copy the whole config folder. Please don't skip this step:
+
+```
+docker compose down
+cp -a ./config ./config.backup
+```
+
+### 2. Change the Docker image
+
+In `docker-compose.yml`:
+
+```diff
+-    image: flobz/psa_car_controller:latest
++    image: ghcr.io/gsparber/psa_car_controller:next
+```
+
+```
+docker compose pull
+docker compose up -d
+```
+
+Without compose, replace the container and use your usual options:
+
+```
+docker rm -f psa_car_controller1
+docker run -d --name psa_car_controller1 \
+  --publish 5000:5000 \
+  -v /host_path/config:/config \
+  --restart unless-stopped \
+  ghcr.io/gsparber/psa_car_controller:next
+```
+
+The header and Settings show the commit of the image. Please name it in your feedback.
+
+`next` moves: run `docker compose pull` and `docker compose up -d` again to update. To stay on one build, use a tag such as `next-ff13f1b`.
+
+### What changes in your data
+
+| File | Change | Can v3.7.10 still use it? |
+|---|---|---|
+| `info.db` | Table `battery_soh`: unique per date instead of per value, so that a SOH value can be recorded again. Migrated at the first start, no rows are lost, and PSACC saves `info_backup_<date>.db` in the config folder first | Yes, it reads and writes the migrated database |
+| `cars.json` | New field `precond_programs` | **No**, it finds no car in this file, see below |
+| `config.ini` | New sections and options | Yes |
+
+Checked offline with the images and sample data (v3.7.10 → `next` → v3.7.10), not yet with a real account. Versions older than v3.7.10 were not tested.
+
+### Go back to the release
+
+Restore `cars.json` only, the database can stay:
+
+```
+docker compose down
+cp ./config.backup/cars.json ./config/cars.json
+```
+
+Set the image back to `flobz/psa_car_controller:latest`, then run `docker compose pull` and `docker compose up -d`.
+
+Don't restore `config.json` or `otp.bin`: the tokens change while PSACC runs, and old ones can force a new login. The number of SMS activations is limited, see the [FAQ](FAQ.md#2-error-during-activation).
+
+## This is a Python program to control and get information from a PSA car.
 I test it with a Peugeot e-208, but it works with other PSA vehicles (Citroen, Opel, Vauxhall, DS).
 
 With this app you will be able to:
@@ -80,3 +158,6 @@ If you want to thank me for my work :smile:
 
 ## Acknowledgements
 - thanks to @tamcore for https://github.com/tamcore/stelloauth 
+
+## Before merging upstream
+The release pipeline publishes the images to the GHCR of this fork. Switch it back to Docker Hub first, see the TODO at the top of [release.yml](.github/workflows/release.yml). Then remove the NEXT title, the test note, the demo GIFs, "How to test `next`" and this section.
