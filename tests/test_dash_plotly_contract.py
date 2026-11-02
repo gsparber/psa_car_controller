@@ -33,8 +33,8 @@ class TestVersions(unittest.TestCase):
 
     def test_project_stays_on_the_major_versions(self):
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('dash = ">=4.0.0, <5.0.0"', project)
-        self.assertIn('plotly = "^7.', project)
+        self.assertIn('"dash>=4.0.0,<5.0.0"', project)
+        self.assertIn('"plotly>=7.0.0,<8.0.0"', project)
 
 
 class TestDash(unittest.TestCase):
