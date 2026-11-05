@@ -55,7 +55,8 @@ class ChargeControl:
         self.psacc.remote_client.charge_now(self.vin, charge)
         self.retry_count += 1
         sleep(ChargeControl.MQTT_TIMEOUT)
-        vehicle_status = self.psacc.get_vehicle_info(self.vin)
+        # part of the refresh loop: it asks PSA as the loop does, the stored status would hide the result
+        vehicle_status = self.psacc.get_vehicle_info(self.vin, scheduled=True)
         status = self._charging_status(vehicle_status)
         if status is None or self.psacc.vehicles_list.get_car_by_vin(self.vin).status_outdated \
                 or self._charge_status_stale(vehicle_status, status):

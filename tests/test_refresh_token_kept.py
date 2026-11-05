@@ -20,6 +20,7 @@ from psa_car_controller.psa.oauth import (Oauth2PSACCApiConfig, OpenIdCredential
                                           refresh_can_recover, rejected_grant_hint)
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.psa_client import PSAClient
+from psa_car_controller.psacc.model.car import Cars
 from tests.test_remote_command_api import get_api_view
 from tests.utils import get_web_view
 
@@ -240,6 +241,7 @@ class TestFailureWithoutAccessToken(unittest.TestCase):
         client.manager = manager
         client.remote_client = None
         client.api_config = Oauth2PSACCApiConfig()
+        client.vehicles_list = Cars()
         return client
 
     def temporary_managers(self):

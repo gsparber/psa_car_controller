@@ -92,7 +92,7 @@ def health():
     myp = getattr(APP, "myp", None)
     body, status = get_health(myp.remote_client if myp else None, APP.remote_control,
                               get_max_mqtt_auth_failures(), myp.is_authenticated() if myp else False,
-                              myp.auth_problem() if myp else AUTH_LOGIN_REQUIRED)
+                              myp.auth_problem() if myp else AUTH_LOGIN_REQUIRED, psacc=myp)
     return jsonify(body), status
 
 
@@ -108,12 +108,22 @@ def get_vehicules():
 
 @app.route('/get_vehicleinfo/<string:vin>')
 def get_vehicle_info(vin):
-    from_cache = int(request.args.get('from_cache', 0)) == 1
+    # from_cache=1 answers with the stored status and never calls PSA, any other number asks PSA
+    try:
+        from_cache = int(request.args.get('from_cache', 0)) == 1
+    except ValueError:
+        return jsonify({"error": "invalid_argument", "message": "from_cache must be 0 or 1"}), 400
+    if APP.myp.vehicles_list.get_car_by_vin(vin) is None:
+        return jsonify({"error": "unknown_vin"}), 404
     info = APP.myp.get_vehicle_info(vin, from_cache)
     if info is None:
         # Every attempt failed upstream; say so rather than raising AttributeError.
         logger.warning("get_vehicle_info returned no data for %s", vin)
-        return jsonify({"error": "no_data", "message": "No vehicle info available from the API"}), 502
+        if from_cache:
+            message = "No vehicle info cached yet"
+        else:
+            message = "No vehicle info available from the API"
+        return jsonify({"error": "no_data", "message": message}), 502
     data = info.to_dict()
     data["data_age_seconds"] = status_age_seconds(info)
     response = app.response_class(

@@ -105,7 +105,7 @@ class TestChargeControl(unittest.TestCase):
                 self.remote_client = mock_client
                 self.refresh_delay = 1
 
-            def get_vehicle_info(self, vin):
+            def get_vehicle_info(self, vin, **_):
                 return MockStatus()
 
         mock_psac = MockPsa()

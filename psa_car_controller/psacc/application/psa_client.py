@@ -1,6 +1,8 @@
 import json
 import threading
+import time
 from copy import copy
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from json import JSONEncoder
 from hashlib import md5
@@ -55,6 +57,25 @@ MAX_REFRESH_DELAY = 3600
 CAR_STAGGER_DELAY = 15
 
 
+@dataclass
+class StatusRequests:
+    """What the status requests of a car did, for /health: known without asking PSA."""
+    last_attempt: Optional[datetime] = None
+    # the last answer with a status, even if it is the same old one: that the car sent nothing new is up to its date
+    last_success: Optional[datetime] = None
+    # "http_<status>", "network" or "authentication", None after a success
+    last_error: Optional[str] = None
+
+
+def retry_after_seconds(ex: ApiException) -> Optional[int]:
+    """Seconds of a Retry-After header in seconds, None without a valid one (an HTTP date isn't used)."""
+    try:
+        value = int(ex.headers.get("Retry-After"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def api_error_code(ex: ApiException):
     """Error code in the body of a failed API request: {"code": 40400, "message": ...}"""
     try:
@@ -71,6 +92,12 @@ class PSAClient:
     _refresh_started = False
     _rate_limited = False
     _rate_limit_backoff = 0
+    # PSA answered 429: until then (time.monotonic()) only the refresh loop asks for a status, the REST API and
+    # charge control use the stored one. Apart from the refresh loop's backoff, which needs the loop to run.
+    _rest_retry_at = 0.0
+    _rate_limit_hits = 0
+    # when the refresh loop asks PSA next, as time.monotonic()
+    _next_refresh_at: Optional[float] = None
     _stop_event: threading.Event = None
     _save_lock = threading.Lock()
     # seconds waited between the cars during the current refresh
@@ -202,36 +229,82 @@ class PSAClient:
             self.abrp.proxies = proxies
         self.manager.proxies = proxies
 
-    def get_vehicle_info(self, vin, cache=False):
+    def get_vehicle_info(self, vin, cache=False, scheduled=False):
+        """The status of a car. cache: the stored one, PSA isn't asked. scheduled: asked by the refresh loop, which
+        waits on its own after a 429; any other caller gets the stored status until the wait is over."""
         car = self.vehicles_list.get_car_by_vin(vin)
         if cache:
             return car.status
-        for _ in range(0, 2):
-            try:
-                res = self.api().get_vehicle_status(car.vehicle_id)
-            except ApiException as ex:
-                if ex.status == TOO_MANY_REQUESTS:
-                    # asking again makes it worse, the refresh loop waits longer instead
-                    logger.warning("Too many requests to the API, can't get the status of %s", car.vin)
-                    self._rate_limited = True
+        if not scheduled and self.rest_retry_in() > 0:
+            logger.debug("PSA rate limit, answering with the stored status of %s", car.vin)
+            return car.status
+        requests = self.status_requests(car.vin)
+        requests.last_attempt = datetime.now(timezone.utc)
+        try:
+            for _ in range(0, 2):
+                try:
+                    res = self.api().get_vehicle_status(car.vehicle_id)
+                except ApiException as ex:
+                    requests.last_error = f"http_{ex.status}"
+                    if ex.status == TOO_MANY_REQUESTS:
+                        # asking again makes it worse, the refresh loop waits longer instead
+                        logger.warning("Too many requests to the API, can't get the status of %s", car.vin)
+                        self._hit_rate_limit(retry_after_seconds(ex))
+                        break
+                    if self._log_status_error(car, ex):
+                        continue
                     break
-                if self._log_status_error(car, ex):
+                except HTTPError as ex:
+                    requests.last_error = "network"
+                    logger.error("get_vehicle_info: %s", ex, exc_info_debug=True)
                     continue
-                break
-            except HTTPError as ex:
-                logger.error("get_vehicle_info: %s", ex, exc_info_debug=True)
-                continue
-            if res is not None:
-                if car.status_outdated:
-                    logger.info("Status of %s received again", car.vin)
-                car.status_request_succeeded()
-                self._set_status(car, res)
-                return car.status
+                if res is not None:
+                    if car.status_outdated:
+                        logger.info("Status of %s received again", car.vin)
+                    car.status_request_succeeded()
+                    self._rate_limit_hits = 0
+                    requests.last_success = datetime.now(timezone.utc)
+                    requests.last_error = None
+                    self._set_status(car, res)
+                    return car.status
+        except AuthenticationRequiredException:
+            requests.last_error = "authentication"
+            raise
         # keep the last status: the API often fails for a moment, and an empty one breaks the UI and charge control
         failures = car.status_request_failed()
         if car.status is not None and failures == EMPTY_STATUS_LIMIT:
             logger.error("No status of %s from the API for %d requests, the last one is outdated", car.vin, failures)
         return car.status
+
+    def status_requests(self, vin) -> StatusRequests:
+        # created here: clients made without __init__ (tests) have it too
+        requests = self.__dict__.setdefault("_status_requests", {})
+        return requests.setdefault(vin, StatusRequests())
+
+    def _hit_rate_limit(self, retry_after: Optional[int] = None):
+        """PSA answered 429: the refresh loop waits longer, the other callers wait too, Retry-After if PSA sent one."""
+        self._rate_limited = True
+        self._rate_limit_hits += 1
+        if retry_after is None:
+            rate = self.info_refresh_rate or DEFAULT_INFO_REFRESH_RATE
+            wait = rate * 2 ** self._rate_limit_hits
+        else:
+            wait = retry_after
+        self._rest_retry_at = time.monotonic() + min(wait, MAX_REFRESH_DELAY)
+
+    def rest_retry_in(self) -> float:
+        """Seconds until PSA may be asked again outside of the refresh loop, 0 if it may be now."""
+        return max(self._rest_retry_at - time.monotonic(), 0)
+
+    def next_refresh_in(self) -> Optional[float]:
+        """Seconds until the refresh loop asks PSA, None if it doesn't run."""
+        if self._next_refresh_at is None or self.info_refresh_rate is None:
+            return None
+        return max(self._next_refresh_at - time.monotonic(), 0)
+
+    def is_rate_limited(self) -> bool:
+        """Whether PSA shouldn't be asked now, by the refresh loop or by anyone else."""
+        return self._is_rate_limited() or self.rest_retry_in() > 0
 
     def _is_rate_limited(self) -> bool:
         return self._rate_limited or self._rate_limit_backoff > 0
@@ -312,7 +385,7 @@ class PSAClient:
 
     def _refresh_car(self, car: Car):
         try:
-            self.get_vehicle_info(car.vin)
+            self.get_vehicle_info(car.vin, scheduled=True)
         except (RateLimitException, AuthenticationRequiredException):
             raise  # the same for the next car
         except Exception:  # pylint: disable=broad-except
@@ -356,14 +429,14 @@ class PSAClient:
 
     def get_stellantis_trips(self, car: Car, since=None, max_pages=1):
         """Trips as Stellantis recorded them, apart from the ones computed from the recorded positions."""
-        if self._is_rate_limited():
+        if self.is_rate_limited():
             raise RateLimitException("stellantis trips")
         try:
             return self.vehicle_services.trips(car.vehicle_id, since, max_pages)
         except ApiException as ex:
             if ex.status == TOO_MANY_REQUESTS:
                 # the status refresh waits longer too
-                self._rate_limited = True
+                self._hit_rate_limit(retry_after_seconds(ex))
                 raise RateLimitException("stellantis trips") from ex
             raise
 
@@ -375,6 +448,7 @@ class PSAClient:
             self.refresh_thread.cancel()
         # the wait between the cars is part of the delay: each car is still asked once per delay
         self.refresh_delay = max(self._next_refresh_delay() - self._staggered, 0)
+        self._next_refresh_at = time.monotonic() + self.refresh_delay
         self.refresh_thread = threading.Timer(self.refresh_delay, self.__refresh_vehicle_info)
         self.refresh_thread.daemon = True
         self.refresh_thread.start()

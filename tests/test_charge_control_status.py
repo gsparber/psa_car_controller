@@ -37,7 +37,7 @@ class TestChargeControlStatus(unittest.TestCase):
         self.psacc = MagicMock()
         self.psacc.vehicles_list = Cars([self.car])
         self.psacc.refresh_delay = 300
-        self.psacc.get_vehicle_info.side_effect = lambda vin: self.car.status
+        self.psacc.get_vehicle_info.side_effect = lambda vin, **_: self.car.status
         self.remote = self.psacc.remote_client
         # the real command: what it needs from the status is part of what is tested
         self.remote.vehicles_list = self.psacc.vehicles_list
@@ -284,7 +284,7 @@ class TestChargeControlStatus(unittest.TestCase):
         self.set_status(get_status(charging()))
         cc = self.charge_control()
 
-        def api_down(vin):
+        def api_down(vin, **_):
             self.car._status_failures = EMPTY_STATUS_LIMIT
             return self.car.status
 

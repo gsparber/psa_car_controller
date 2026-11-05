@@ -14,6 +14,17 @@ These links will work only if PSACC is on your computer, if it isn't please repl
    3 failed requests in a row, the answer is the last status received and has the header `X-Status-Outdated` with
    the number of failed requests.
 
+   `from_cache=1` never asks PSA, also without a valid login: the stored status, however old. Any other whole
+   number asks PSA, anything else is answered with 400 `invalid_argument`. Errors:
+   - 404 `unknown_vin`: the VIN isn't one of the account's cars.
+   - 502 `no_data`: no status yet (with `from_cache=1`: nothing stored yet, PSA wasn't asked).
+   - 503 `authentication_required`: PSA has to be asked, but there is no valid login.
+
+   After PSA answered 429 (too many requests), PSA isn't asked again before its `Retry-After`, or else
+   10 minutes, doubled with each further 429 up to an hour: the answer is the stored status, as with
+   `from_cache=1`. This waiting doesn't count as a failed request. The regular refresh (`-R`, charge control) keeps
+   its own schedule. `/health` tells when PSA is asked again.
+
 3. Stop charge
 
    http://localhost:5000/charge_now/YOURVIN/0
@@ -37,6 +48,8 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 8. Start (1)/Stop (0) preconditioning
 
    http://localhost:5000/preconditioning/YOURVIN/1 or 0
+
+   409 `{"error": "..."}` when the command can't be sent (for example while the car's programs are unknown).
 
 9. Change charge hour (for example: set it to 22h30)
 
@@ -68,6 +81,8 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
     http://localhost:5000/battery/soh/YOURVIN
 
+    `{"soh": 97.5}`, `{"soh": null}` while none was recorded (also for an unknown VIN).
+
 16. Get the vehicle charging sessions
    
    http://localhost:5000/vehicles/chargings
@@ -85,6 +100,9 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 17. Get the vehicle trips:
    
    http://localhost:5000/vehicles/trips
+
+   A list of the trips of the first car. `{}` when the account has no car, `[]` when there aren't enough recorded
+   positions yet (kept as it was, clients may rely on it).
 
    Each trip has `"estimated": false`, or `"estimated": true` for a drive only known from two positions more than
    2 h apart: the mileage rose by more than 1 km, or by at least 0.2 km/h. A charge or a refuel on the way doesn't
@@ -153,3 +171,34 @@ These links will work only if PSACC is on your computer, if it isn't please repl
     of the API, up to `max_pages` pages (1 by default, at most 10); `more` is true when pages were left.
     Unrelated to the trips computed from the recorded positions (`/vehicles/trips`). Answers are kept 10 minutes.
     404 `not_available` when the account has no trips endpoint, 429 while PSA rate limits the account.
+
+21. Health
+
+    http://localhost:5000/health
+
+    Only reads what PSACC already knows, never asks PSA: cheap to poll, also by the Docker healthcheck.
+    503 only after the MQTT broker refused the remote credentials `PSACC_HEALTH_MAX_MQTT_AUTH_FAILURES` times in a
+    row (5 by default). Everything else is reported, but stays 200: restarting doesn't fix a PSA outage or a login.
+
+    ```json
+    {"api_authenticated": true,
+     "data_supply": "degraded", "data_supply_problems": ["rate_limited"],
+     "rate_limit": {"active": true, "retry_in_seconds": 540, "next_refresh_in_seconds": 600},
+     "vehicles": [{"vin": "***0000", "last_status_attempt": "2026-11-06T09:58:00+00:00",
+                   "last_status_success": "2026-11-06T09:53:00+00:00", "status_success_age_seconds": 420,
+                   "data_age_seconds": 5400, "consecutive_failures": 0, "last_error": "http_429",
+                   "status_outdated": false}],
+     "remote_control": true, "mqtt_connected": true, "consecutive_auth_failures": 0,
+     "last_connect": "2026-11-06T08:00:00+00:00"}
+    ```
+
+    - `status_success_age_seconds`: since PSA last answered with a status, `data_age_seconds`: since the car sent
+      that status. PSA can keep answering with the same old status, and a parked car sends nothing new: a large
+      `data_age_seconds` alone is no error. `null` when unknown.
+    - `last_error`: `http_<status>`, `network` or `authentication` for the last request, `null` after a success.
+    - `rate_limit.retry_in_seconds`: until PSA is asked again outside of the regular refresh,
+      `next_refresh_in_seconds`: until the regular refresh, `null` if it doesn't run.
+    - `data_supply_problems`: `rate_limited`, `status_requests_failing` (3 failed requests in a row) and
+      `no_recent_status` (while the regular refresh runs: no status from PSA for `PSACC_HEALTH_MAX_STATUS_AGE`
+      seconds, 900 by default).
+    - The VIN is masked but for its last 4 characters.
