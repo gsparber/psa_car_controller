@@ -43,7 +43,7 @@ psa-car-controller = "psa_car_controller.__main__:main"
 [tool.poetry.group.dev.dependencies]
 prospector = "1.20.0"
 pre-commit = "4.7.0"
-coverage = "7.17.0"
+coverage = "7.17.2"
 deepdiff = "9.1.0"
 autopep8 = "2.3.2"
 pylint = "4.1.3"
