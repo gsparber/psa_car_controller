@@ -4,7 +4,8 @@ The automatic login opens the Stellantis login page in a local Playwright browse
 PSACC can ask a login service instead: [stelloauth](https://github.com/tamcore/stelloauth), or another service with
 the same `POST /worker` API. PSACC only calls the service, it doesn't contain or start it.
 
-It is **off by default**. With a URL set, the login order is: login worker → local Playwright browser → manual link.
+It is **off by default**. With a URL set, the login order is: login worker → local Playwright browser → manual link
+(without the local browser when `local browser = false`, see [Raspberry Pi](#raspberry-pi-and-other-small-machines)).
 When the worker fails, its message is shown. A rate limit of the worker (HTTP 429) is reported as such.
 
 The local browser only takes over when the worker can't have tried your credentials or wasn't able to log in for
@@ -49,6 +50,29 @@ read them and log in to your account, and with it locate your car.
    Give the base URL of the service. PSACC calls `/worker` on it, the only endpoint that uses the PKCE challenge of
    PSACC: a code from the web page of stelloauth wouldn't be accepted.
 3. Log in as usual from the settings page. It can take several minutes: PSACC waits up to 5 minutes for the worker.
+
+## Raspberry Pi and other small machines
+
+The local login browser is Chromium: on a Raspberry Pi with 2 GB, next to other services, it can take minutes and
+most of the memory. To keep it off the Pi:
+
+1. Run stelloauth on another, stronger machine you control (a PC or NAS on your network). On the Pi itself it wouldn't
+   help: it starts a browser too.
+2. Set its URL in `[Login Worker]`, with `https://` unless it's in your local network (see Security above).
+3. Turn the local browser off, so that a worker that doesn't answer, is busy or rate limited (429) never starts
+   Chromium on the Pi:
+
+   ```ini
+   [Login Worker]
+   url = http://192.168.1.20:8080
+   local browser = false
+   ```
+
+   Login order then: login worker → manual link. Without a worker URL, the manual link comes right away.
+
+A login is only needed once, and again when Stellantis rejects the stored refresh token: PSACC refreshes its tokens
+itself. The manual link needs no browser on the Pi: open the PSACC page in a browser on your PC, follow the steps it
+shows (the code is read from the developer tools, which a phone's browser usually lacks) and paste the code there.
 
 ## What is sent
 

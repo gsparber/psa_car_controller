@@ -383,6 +383,35 @@ class TestLoginOrder(unittest.TestCase):
         for expected in ("no way", "complete manually", "Go to login"):
             self.assertIn(expected, text)
 
+    def test_without_local_browser_a_failing_worker_ends_on_the_manual_link(self):
+        # e.g. a Raspberry Pi: a worker timeout or 429 mustn't start Chromium there
+        self.config.Login_Worker.local_browser = False
+        for error in ("Login service w: rate limit (HTTP 429)", "The login service w did not answer in time"):
+            with self.subTest(error):
+                self.worker.side_effect = WorkerLoginError(error)
+                result = self.login()
+                self.headless.assert_not_called()
+                self.setup.connect.assert_not_called()
+                text = text_of(result)
+                for expected in (error, "local browser is off", "Go to login"):
+                    self.assertIn(expected, text)
+
+    def test_without_local_browser_and_worker_only_the_manual_link(self):
+        self.config.Login_Worker.local_browser = False
+        self.config.Login_Worker.url = None
+        result = self.login()
+        self.worker.assert_not_called()
+        self.headless.assert_not_called()
+        self.assertIn("Go to login", text_of(result))
+
+    def test_without_local_browser_the_worker_still_logs_in(self):
+        self.config.Login_Worker.local_browser = False
+        self.worker.return_value = "worker-code"
+        result = self.login()
+        self.headless.assert_not_called()
+        self.setup.connect.assert_called_once_with("worker-code")
+        self.assertEqual("success", result.color)
+
     def test_notice_only_with_a_worker(self):
         self.config.Login_Worker.url = None
         self.assertIsNone(self.views._login_worker_notice())
@@ -419,6 +448,14 @@ class TestLoginWorkerConfig(unittest.TestCase):
     def test_old_config_without_the_section(self):
         config = ConfigRepository(General={}, Electricity_config={})
         self.assertIsNone(config.Login_Worker.url)
+        self.assertTrue(config.Login_Worker.local_browser)
+
+    def test_local_browser_is_read(self):
+        for value, expected in (("false", False), ("true", True)):
+            with self.subTest(value):
+                config = ConfigRepository.get_default_config()
+                config["Login Worker"]["local browser"].value = value
+                self.assertIs(expected, ConfigRepository.config_file_to_dto(config).Login_Worker.local_browser)
 
 
 class TestSettingsApi(unittest.TestCase):

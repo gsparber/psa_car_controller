@@ -58,6 +58,8 @@ base topic = psa_car_controller
 # your own stelloauth worker, tried first at login, e.g. http://stelloauth:8080; empty: off
 # your account email and password are sent to it: only use a service you host yourself, with https unless it's local
 url =
+# false: never start the local browser at login, e.g. on a Raspberry Pi: the worker, then the manual link
+local browser = true
 """
 
 
@@ -207,6 +209,7 @@ class HomeAssistantMqttConfig(SectionConfig):
 
 class LoginWorkerConfig(SectionConfig):
     url: Optional[str] = None
+    local_browser: bool = True
 
 
 class ConfigRepository(BaseModel):

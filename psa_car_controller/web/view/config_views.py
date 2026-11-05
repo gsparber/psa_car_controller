@@ -74,6 +74,11 @@ def _login_worker_url():
     return (app.config.Login_Worker.url or "").strip()
 
 
+def _local_browser_allowed():
+    """False when config.ini says not to start the local browser, e.g. on a Raspberry Pi with little RAM."""
+    return getattr(app.config.Login_Worker, "local_browser", True) is not False
+
+
 def _login_worker_notice():
     """Tells before the submit that the credentials leave this app."""
     worker_url = _login_worker_url()
@@ -365,12 +370,19 @@ def _login(app_name, email, password, countrycode, report_step):
         if _login_worker_url():
             report_step(STEP_WORKER)
         code, worker_error = _code_from_worker(auth_url, email, password)
+        if code is None and not _local_browser_allowed():
+            logger.info("The local browser is off (local browser in [Login Worker]), the login is left to the manual "
+                        "link")
+            raise JobFailure("The local browser is off in config.ini. Please complete the login manually:",
+                             LoginDetails(LOGIN_MANUAL, auth_url, worker_error))
         if code is None:
             report_step(STEP_STELLANTIS)
             code = get_oauth_code_headless(auth_url, email, password, scheme)
         report_step(STEP_SAVING)
         INITIAL_SETUP.connect(code)
         return "Login successful!", LoginDetails(LOGIN_OK, worker_error=worker_error)
+    except JobFailure:
+        raise
     except MissingCustomerIdError as e:
         # the login worked, logging in again by hand would fail the same way
         raise JobFailure(str(e)) from e
