@@ -4,15 +4,9 @@
 
 1.2 Install requirements :
 
-- You need **python >= 3.13**
+- You need **python >= 3.15**
 
-- On debian based distribution you can install some requirement from repos, it's faster than installtion with pip: 
- 
- ```
- sudo apt-get install python3-typing-extensions python3-pandas python3-plotly python3-six python3-dateutil python3-brotli libblas-dev  liblapack-dev gfortran python3-pycryptodome libatlas3-base python3-cryptography python3-pip
- ```
-    
-- For everyone :
+- Then :
       ```pip3 install psa-car-controller```
 
 - Install [Playwright](https://playwright.dev/python/) for automatic OAuth login:

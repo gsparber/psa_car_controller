@@ -51,14 +51,15 @@
       "separateMajorMinor": false
     },
     {
-      "description": "CI tests the Python of the image, Debian 13 ships 3.13. Change this rule with the Debian version",
+      "description": "CI tests the Python of the image: the next Python of both is a decision, taken together",
       "matchManagers": [
-        "github-actions"
+        "github-actions",
+        "dockerfile"
       ],
       "matchDepNames": [
         "python"
       ],
-      "allowedVersions": "/^3\\.13(\\.|$)/"
+      "allowedVersions": "/^3\\.15([.-]|$)/"
     },
     {
       "description": "The supported Python range is a decision, not an update",
@@ -71,30 +72,7 @@
       "enabled": false
     },
     {
-      "description": "Ubuntu 26.04 has no libatlas-base-dev, which test.yml and apk-format.yml install",
-      "matchDatasources": [
-        "github-runners"
-      ],
-      "matchPackageNames": [
-        "ubuntu"
-      ],
-      "allowedVersions": "/^2[24]\\.04$/"
-    },
-    {
-      "description": "A new Debian changes Python and the system packages: the tag alone broke the pip step of the image from 12 to 13",
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchPackageNames": [
-        "debian"
-      ],
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "dependencyDashboardApproval": true
-    },
-    {
-      "description": "The image uses the pandas of Debian 13 (2.2.3), a new major also needs a look at the pages",
+      "description": "A new pandas major needs a look at the pages, its tests don't see charts and tables",
       "matchManagers": [
         "poetry"
       ],

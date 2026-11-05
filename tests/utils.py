@@ -7,7 +7,6 @@ from datetime import UTC, timedelta, datetime
 from unittest.mock import MagicMock, patch
 
 from dash import html
-from deepdiff import DeepDiff
 
 from psa_car_controller.psa.RemoteClient import RemoteClient
 from psa_car_controller.psacc.application.charging import Charging
@@ -96,8 +95,29 @@ def get_rc() -> RemoteClient:
     return RemoteClient(account_info, Cars(), None, None)
 
 
+def differences(expected, result, path="root"):
+    """Like DeepDiff, which these tests used before: a float is not the same as a numpy float."""
+    if type(expected) is not type(result):
+        yield f"{path}: {type(result).__name__} {result!r}, expected {type(expected).__name__} {expected!r}"
+    elif isinstance(expected, dict):
+        for key in expected.keys() | result.keys():
+            if key not in result:
+                yield f"{path}[{key!r}] missing"
+            elif key not in expected:
+                yield f"{path}[{key!r}] not expected"
+            else:
+                yield from differences(expected[key], result[key], f"{path}[{key!r}]")
+    elif isinstance(expected, (list, tuple)):
+        if len(expected) != len(result):
+            yield f"{path}: {len(result)} items, expected {len(expected)}"
+        for index, (expected_item, item) in enumerate(zip(expected, result)):
+            yield from differences(expected_item, item, f"{path}[{index}]")
+    elif expected != result:
+        yield f"{path}: {result!r}, expected {expected!r}"
+
+
 def compare_dict(result, expected):
-    diff = DeepDiff(expected, result)
-    if diff != {}:
-        raise AssertionError(str(diff))
+    diff = list(differences(expected, result))
+    if diff:
+        raise AssertionError("\n".join(diff))
     return True

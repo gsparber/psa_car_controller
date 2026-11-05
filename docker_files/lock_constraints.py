@@ -1,7 +1,7 @@
 """Prints constraints for pip: what poetry.lock has, without what the system already installed.
 
-The wheel only has ranges, so an image would install the newest versions, which CI never tested. The packages of Debian
-stay: pip can't replace most of them, and numpy, pandas and scipy have no wheels for armv7.
+The wheel only has ranges, so an image would install the newest versions, which CI never tested. What the system
+installed stays as it is: pip couldn't replace most packages of Debian, which the image used before.
 """
 import re
 import sys

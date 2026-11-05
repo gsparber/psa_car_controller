@@ -1,39 +1,28 @@
-ARG PYTHON_DEP='python3 python3-pandas python3-six python3-dateutil python3-brotli libatlas3-base python3-lxml python3-yaml python3-flask python3-ruamel.yaml ca-certificates python3-numpy'
-# python3-scipy depends on pythran, which pulls in gcc, g++ and boost; only the builder installs it
-ARG SCIPY_RUNTIME_DEP='python3-decorator libgfortran5 liblbfgsb0 libblas3 liblapack3'
 ARG DEBIAN_FRONTEND=noninteractive
-FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS builder
-ARG PYTHON_DEP
-RUN  BUILD_DEP='python3-pip python3-setuptools python3-dev libblas-dev liblapack-dev gfortran libffi-dev libxml2-dev libxslt1-dev make automake gcc g++ subversion ninja-build' ; \
-     apt-get update && apt-get install -y --no-install-recommends $BUILD_DEP $PYTHON_DEP python3-scipy;
+# Python of the image and CI (python-version in .github/workflows), change them together. Everything else comes
+# from PyPI in the versions of poetry.lock: there are wheels for amd64 and arm64, armv7 isn't built anymore.
+FROM python:3.15-slim-trixie@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75 AS builder
+ARG DEBIAN_FRONTEND
+# pyyaml and mutf8 have no wheels for this Python yet
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev
 ARG PSACC_VERSION="0.0.0"
-RUN pip3 install --break-system-packages --ignore-installed --upgrade pip wheel setuptools typing_extensions
 COPY ./dist/psa_car_controller-${PSACC_VERSION}-py3-none-any.whl ./poetry.lock ./docker_files/lock_constraints.py ./
 RUN python3 lock_constraints.py poetry.lock > constraints.txt && \
-    pip3 install --break-system-packages --no-cache-dir --constraint constraints.txt psa_car_controller-${PSACC_VERSION}-py3-none-any.whl && \
-    python3 -m pip uninstall -y --break-system-packages pip wheel setuptools && \
-    mkdir /scipy && cp -a /usr/lib/python3/dist-packages/scipy /usr/lib/python3/dist-packages/scipy-*.dist-info /scipy/
-EXPOSE 5000
+    pip install --no-cache-dir --root-user-action=ignore --prefix=/install --constraint constraints.txt \
+        psa_car_controller-${PSACC_VERSION}-py3-none-any.whl
 
-FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
-ARG PYTHON_DEP
-ARG SCIPY_RUNTIME_DEP
+FROM python:3.15-slim-trixie@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75
+ARG DEBIAN_FRONTEND
 WORKDIR /config
 ENV PSACC_BASE_PATH=/ PSACC_PORT=5000 PSACC_OPTIONS="-c -r --web-conf" PSACC_CONFIG_DIR="/config" PYTHONPATH="/app"
-RUN  apt-get update && \
-     apt-get install -y --no-install-recommends $PYTHON_DEP $SCIPY_RUNTIME_DEP curl && \
-     apt-get clean && \
-     rm -rf /var/lib/apt/lists/*
-COPY --from=builder /scipy/ /usr/lib/python3/dist-packages/
-COPY --from=builder /usr/local/lib /usr/local/lib
-COPY --from=builder /usr/local/bin/  /usr/local/bin/
-
-# Install the Chromium headless shell and its dependencies (Playwright is not installed on armv7)
-RUN (command -v playwright >/dev/null && \
-     playwright install --with-deps --only-shell chromium || \
-     echo "Playwright not available on this architecture, headless auth will use manual fallback") && \
+COPY --from=builder /install /usr/local
+# curl for the health check, and the Chromium headless shell with its dependencies for the headless login
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    playwright install --with-deps --only-shell chromium && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+EXPOSE 5000
 
 COPY /docker_files/init.sh /init.sh
 # /health only fails (503) once the MQTT broker keeps refusing the remote credentials
