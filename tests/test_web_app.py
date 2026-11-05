@@ -31,6 +31,15 @@ class TestConfigFlask(unittest.TestCase):
         self.assertIs(app, web_app.app)
         self.assertIs(dash_app, web_app.dash_app)
 
+    def test_prefix_of_a_request_doesnt_stay(self):
+        # a test client runs the request in its own thread: an ingress prefix stayed for whatever ran there next
+        self.config_flask()
+        config = web_app.dash_app.config
+        before = config.requests_pathname_prefix
+        response = web_app.app.test_client().get("/_dash-layout", headers={"X-Ingress-Path": "/api/hassio_ingress/x"})
+        response.close()
+        self.assertEqual(before, config.requests_pathname_prefix)
+
 
 if __name__ == '__main__':
     unittest.main()

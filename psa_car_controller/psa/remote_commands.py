@@ -4,6 +4,7 @@ import time
 from collections import OrderedDict
 from typing import Dict, List, Optional
 
+from psa_car_controller.psa.constants import IMMEDIATE_CHARGE
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 
 # answers to a command arrive within minutes (wakeup -> 901 -> result or 300 timeout),
@@ -38,6 +39,31 @@ STATE_BY_RETURN_CODE = {RC_SUCCESS: SUCCESS, RC_FAILED: FAILED, RC_SERVER_ERROR:
 # a command without final answer after this long is no longer waited for: the car runs one command
 # at a time, but an answer lost (mqtt reconnect, restart) mustn't block the next command for long
 PENDING_TIMEOUT = 120
+
+
+COMMAND_LABELS = {"/Horn": "Horn", "/Lights": "Lights", "/VehCharge/state": "Wake-up", "/Doors": "Doors",
+                  "/ThermalPrecond": "Preconditioning"}
+
+
+def describe_request(request: MQTTRequest) -> str:
+    """What a command asks for, readable: "/VehCharge" both starts and stops a charge."""
+    parameters = request.req_parameters if isinstance(request.req_parameters, dict) else {}
+    if request.name == "/VehCharge":
+        program = parameters.get("program") or {}
+        if parameters.get("type") == IMMEDIATE_CHARGE:
+            return "Charge now"
+        try:
+            hour = f"{int(program['hour']):02d}:{int(program['minute']):02d}"
+        except (KeyError, TypeError, ValueError):
+            hour = "?"
+        # a delayed charge stops the one running, until that hour
+        return f"Stop the charge, delayed charge at {hour}"
+    if request.name == "/Doors":
+        return "Lock the doors" if parameters.get("action") == "lock" else "Unlock the doors"
+    if request.name == "/ThermalPrecond":
+        asap = parameters.get("asap")
+        return "Start preconditioning" if asap == "activate" else "Stop preconditioning or set its programs"
+    return COMMAND_LABELS.get(request.name, request.name)
 
 
 def describe_error(reason, resp_data) -> Optional[str]:

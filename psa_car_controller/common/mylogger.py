@@ -50,7 +50,24 @@ file_handler.addFilter(sensitive_filter)
 stream_handler.addFilter(sensitive_filter)
 
 
+_started_level = {"level": logging.INFO}
+
+
+def set_debug(enabled: bool):
+    """Log everything until the next start, also the raw MQTT and API messages; off goes back to the start level."""
+    level = logging.DEBUG if enabled else _started_level["level"]
+    logger.setLevel(level)
+    file_handler.setLevel(level)
+    stream_handler.setLevel(level)
+    logger.info("Debug logging %s from the web page", "on" if enabled else "off")
+
+
+def is_debug() -> bool:
+    return logger.getEffectiveLevel() <= logging.DEBUG
+
+
 def my_logger(handler_level=logging.INFO):
+    _started_level["level"] = handler_level
     logger.setLevel(handler_level)
     file_handler.setLevel(handler_level)
     file_handler.setFormatter(formatter)

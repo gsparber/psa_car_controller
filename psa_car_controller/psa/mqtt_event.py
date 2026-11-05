@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 EVENT_DATE_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # change with every event, not with the state of the car
 BOOKKEEPING_KEYS = ("date", "obj_counter", "reason", "signal_quality")
+# charging_state.remaining_time when there is none, e.g. plugged in but not charging (0xFFE, seen in the fork
+# origati/psa_car_controller 5676d70)
+REMAINING_TIME_UNKNOWN = 4094
 # hmi_state; 2 and 4 are seen around the start of a charge but their meaning is unknown
 CHARGING_STATUS = {0: "Disconnected", 1: "InProgress", 3: "Stopped"}
 # doors_locking_state; 0 and 7 are short steps while unlocking and locking
@@ -65,6 +68,32 @@ def parse_event(payload: dict) -> dict:
         "preconditioning": precond.get("status"),
         "programs": precond.get("programs") or None,
     }
+
+
+def describe_event(payload: dict) -> str:
+    """The values of a vehicle event that matter for charging and the doors, readable, for the event log.
+
+    The raw values are given too: what the codes mean is partly guessed (hmi_state 2 and 4, cable_detected).
+    """
+    event = parse_event(payload)
+    charging = payload.get("charging_state") or {}
+    hmi_state, plugged = event["charging"]
+    parts = [f"charging {CHARGING_STATUS.get(hmi_state, 'unknown')} (hmi_state {hmi_state})",
+             f"plugged {'?' if plugged is None else 'yes' if plugged else 'no'} "
+             f"(cable_detected {charging.get('cable_detected')})"]
+    if charging.get("rate"):
+        parts.append(f"rate {charging.get('rate')}")
+    remaining_time = charging.get("remaining_time")
+    if remaining_time == REMAINING_TIME_UNKNOWN:
+        parts.append("remaining_time unknown")
+    elif remaining_time is not None:
+        parts.append(f"remaining_time {remaining_time}")
+    if event["doors"] is not None:
+        parts.append(f"doors {LOCK_STATE.get(event['doors'], event['doors'])}")
+    if event["preconditioning"] is not None:
+        parts.append(f"air conditioning {AIR_CONDITIONING_STATUS.get(event['preconditioning'], '?')}")
+    when = event["date"].strftime("%H:%M:%S UTC") if event["date"] else "no date"
+    return f"{', '.join(parts)}; sent {when}, counter {event['counter']}"
 
 
 def _as_utc(date):

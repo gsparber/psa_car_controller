@@ -229,7 +229,8 @@ class InitialSetup:
             if isinstance(settings, dict) and isinstance(settings.get("percentage_threshold", 100), int):
                 try:
                     return ChargeControl(self.psacc, vin, settings.get("percentage_threshold", 100),
-                                         settings.get("stop_hour", [0, 0]))
+                                         settings.get("stop_hour", [0, 0]), settings.get("estimate", False),
+                                         settings.get("stop_margin", 0))
                 except (ValueError, TypeError, IndexError):
                     pass
             logger.warning("Invalid charge control settings for %s will be reset: %s", vin, settings)

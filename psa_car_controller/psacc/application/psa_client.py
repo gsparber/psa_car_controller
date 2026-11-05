@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import time
 from copy import copy
@@ -15,7 +16,7 @@ from urllib3.exceptions import HTTPError
 from psa_car_controller.psa.connected_car_api.api.vehicles_api import VehiclesApi
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.model.car import Cars, Car, EMPTY_STATUS_LIMIT
-from psa_car_controller.psacc.model.car_status import status_updated_at
+from psa_car_controller.psacc.model.car_status import status_key, status_summary, status_updated_at
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.application.command_refresh import CommandStatusRefresh
 from psa_car_controller.psacc.application.vehicle_services import VehicleServices
@@ -30,6 +31,7 @@ from psa_car_controller.psa.constants import realm_info, AUTHORIZE_SERVICE, INPR
 
 from .abrp import Abrp
 from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.common import events
 from psa_car_controller.common.mylogger import CustomLogger
 from psa_car_controller.common.sensitive_filter import sensitive_filter
 from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException, atomic_write
@@ -250,13 +252,21 @@ class PSAClient:
                         # asking again makes it worse, the refresh loop waits longer instead
                         logger.warning("Too many requests to the API, can't get the status of %s", car.vin)
                         self._hit_rate_limit(retry_after_seconds(ex))
+                        events.record(events.API, "Rate limit (HTTP 429): until PSA is asked again in %d s, the "
+                                      "stored status is the answer", self.rest_retry_in(), vin=car.vin,
+                                      level=logging.WARNING)
                         break
+                    events.record(events.API, "Status request failed: HTTP %s, code %s", ex.status,
+                                  api_error_code(ex), vin=car.vin, level=logging.WARNING,
+                                  same_as=("failed", ex.status, api_error_code(ex)))
                     if self._log_status_error(car, ex):
                         continue
                     break
                 except HTTPError as ex:
                     requests.last_error = "network"
                     logger.error("get_vehicle_info: %s", ex, exc_info_debug=True)
+                    events.record(events.API, "Status request failed: %s", type(ex).__name__, vin=car.vin,
+                                  level=logging.WARNING, same_as=("failed", type(ex).__name__))
                     continue
                 if res is not None:
                     if car.status_outdated:
@@ -266,9 +276,14 @@ class PSAClient:
                     requests.last_success = datetime.now(timezone.utc)
                     requests.last_error = None
                     self._set_status(car, res)
+                    # the same status again (a parked car) is counted on the last event, not listed every refresh
+                    events.record(events.API, "Status: %s", status_summary(car.status), vin=car.vin,
+                                  same_as=("status", *status_key(car.status)))
                     return car.status
         except AuthenticationRequiredException:
             requests.last_error = "authentication"
+            events.record(events.API, "Status not asked for: no valid login", vin=car.vin, level=logging.WARNING,
+                          same_as=("no login",))
             raise
         # keep the last status: the API often fails for a moment, and an empty one breaks the UI and charge control
         failures = car.status_request_failed()

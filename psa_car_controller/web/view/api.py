@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from psa_car_controller.psa.oauth2_client import OAuthError
 
+from psa_car_controller.common import events
 from psa_car_controller.common.utils import AuthenticationRequiredException, RateLimitException, \
     validate_preconditioning_programs
 from urllib3.exceptions import HTTPError
@@ -18,6 +19,7 @@ from psa_car_controller.psa.oauth import AUTH_LOGIN_REQUIRED, refresh_can_recove
 from psa_car_controller.psa.connected_car_api.rest import ApiException
 from psa_car_controller.psacc.application.vehicle_services import MAX_TRIPS_PAGES, UNSUPPORTED_STATUSES
 from psa_car_controller.psacc.application.car_controller import PSACarController
+from psa_car_controller.psacc.application.charge_control import describe_settings
 from psa_car_controller.psacc.application.health import get_health, get_max_mqtt_auth_failures
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.app import app
@@ -153,6 +155,7 @@ def get_style():
 @app.route('/charge_now/<string:vin>/<int:charge>')
 @tracks_command
 def charge_now(vin, charge):
+    events.record(events.USER, "REST API: %s", "start charging" if charge else "stop charging", vin=vin)
     return jsonify(APP.myp.remote_client.charge_now(vin, charge != 0))
 
 
@@ -231,6 +234,22 @@ def get_charge_control():
             charge_control.set_stop_hour([int(request.args["hour"]), int(request.args["minute"])])
         if 'percentage' in request.args:
             charge_control.percentage_threshold = int(request.args['percentage'])
+        if 'estimate' in request.args or 'margin' in request.args:
+            estimate = request.args.get('estimate', '1' if charge_control.estimate else '0')
+            try:
+                margin = int(request.args.get('margin', charge_control.stop_margin))
+            except ValueError:
+                margin = None
+            if estimate not in ('0', '1') or margin is None or \
+                    not 0 <= margin <= charge_control.MAX_STOP_MARGIN:
+                return jsonify({"error": "invalid_argument",
+                                "message": f"estimate must be 0 or 1, margin 0 to "
+                                f"{charge_control.MAX_STOP_MARGIN}"}), 400
+            charge_control.set_estimate(estimate == '1', margin)
+        if {'hour', 'minute', 'percentage', 'estimate', 'margin'} & set(request.args):
+            events.record(events.USER, "REST API: automatic stop %s",
+                          describe_settings(charge_control.percentage_threshold, charge_control.get_stop_hour(),
+                                            charge_control.estimate, charge_control.stop_margin), vin=vin)
         APP.chc.save_config()
         return jsonify(charge_control.get_dict())
     error = "Charge control not setup check your PSACC configuration and logs"

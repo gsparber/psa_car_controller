@@ -1,4 +1,5 @@
-"""Log page: newest entries first, grouped by day, filtered by level, tracebacks folded. Readable on a phone."""
+"""Log page: the events (status requests, MQTT, commands, charge control, user actions) or the log file, newest
+first, grouped by day, filtered by category or level, tracebacks folded. Readable on a phone."""
 import logging
 import os
 import re
@@ -6,15 +7,25 @@ from datetime import date, datetime
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
-from psa_car_controller.common.mylogger import LOG_FILE
+from psa_car_controller.common.events import CATEGORIES, EVENTS, USER, Event, as_text, record
+from psa_car_controller.common.mylogger import LOG_FILE, is_debug, set_debug
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import ui
 
 logger = logging.getLogger(__name__)
 
+VIEW = "log-view"
+EVENTS_VIEW, FILE_VIEW = "events", "file"
+VIEWS = {EVENTS_VIEW: "Events", FILE_VIEW: "Log file"}
+CATEGORY = "log-category"
+CATEGORY_ROW = "log-category-row"
+LEVEL_ROW = "log-level-row"
+EVENTS_NOTE = "log-events-note"
+DEBUG_SWITCH = "log-debug"
+ALL = "all"
 LEVEL = "log-level"
 CONTENT = "log-content"
 POLL = "log-poll"
@@ -101,6 +112,34 @@ def render(level, today=None):
             for day, rows in by_day.items()]
 
 
+def _event(event: Event):
+    level = event.level
+    when = f"{event.at.astimezone():%H:%M:%S}"
+    if event.count > 1:
+        # a parked car answers the same every refresh: one row for all of them
+        when = f"{event.first_at.astimezone():%H:%M}–{event.at.astimezone():%H:%M} · {event.count} times the same"
+    return html.Div([
+        html.Div([html.Span(when, className="log-time"),
+                  html.Span(CATEGORIES.get(event.category, event.category), className="badge text-bg-secondary"),
+                  html.Span(event.vin, className="log-time") if event.vin else None,
+                  html.Span(level.title(), className=f"log-level log-{level.lower()}") if level != "INFO" else None],
+                 className="d-flex align-items-center gap-2 mb-1 flex-wrap"),
+        html.Div(event.message, className="log-message"),
+    ], className=f"list-group-item log-entry log-entry-{level.lower()}")
+
+
+def render_events(category, today=None):
+    entries = EVENTS.entries(None if category == ALL else [category])
+    if not entries:
+        return html.P("Nothing happened in this category since the start.", className="text-body-secondary")
+    today = today or date.today()
+    by_day = {}
+    for event in entries:
+        by_day.setdefault(event.at.astimezone().date(), []).append(_event(event))
+    return [ui.section(_day_title(day, today), [html.Div(rows, className="list-group")])
+            for day, rows in by_day.items()]
+
+
 def get_log_layout():
     return html.Div([
         # the times stay the ones of the log file, and so of the download; the days group them the same way
@@ -108,22 +147,55 @@ def get_log_layout():
                   dbc.Button([html.I(className="bi bi-download me-2"), "Download"], id=DOWNLOAD_BUTTON,
                              color="secondary", outline=True, size="sm", className="ms-auto")],
                  className="d-flex align-items-center"),
-        ui.period_chips(LEVEL, LEVELS, "info"),
+        ui.period_chips(VIEW, VIEWS, EVENTS_VIEW),
+        html.Div(ui.period_chips(CATEGORY, {ALL: "All", **CATEGORIES}, ALL), id=CATEGORY_ROW, className="mt-2"),
+        html.Div(ui.period_chips(LEVEL, LEVELS, "info"), id=LEVEL_ROW, className="mt-2"),
+        html.Div([dbc.Switch(id=DEBUG_SWITCH, value=is_debug(), label=_debug_label(), className="mb-0"),
+                  html.Small("Everything into the log file until the next restart, also the raw messages of PSA "
+                             "and MQTT with the positions of the cars. Secrets and VINs stay masked.",
+                             className="text-body-secondary d-block")], className="mt-3"),
+        html.Small("Events: the last 500 since the start, kept in memory only.", id=EVENTS_NOTE,
+                   className="text-body-secondary d-block mt-2"),
         dcc.Interval(id=POLL, interval=15 * 1000),
         dcc.Download(id=DOWNLOAD),
-        html.Div(id=CONTENT),
+        html.Div(id=CONTENT, className="mt-2"),
     ], className="page")
 
 
-@dash_app.callback(Output(CONTENT, "children"), Input(LEVEL, "value"), Input(POLL, "n_intervals"))
-def show_log(level, _):
+@dash_app.callback(Output(CONTENT, "children"), Output(CATEGORY_ROW, "hidden"), Output(LEVEL_ROW, "hidden"),
+                   Output(EVENTS_NOTE, "hidden"),
+                   Input(VIEW, "value"), Input(CATEGORY, "value"), Input(LEVEL, "value"), Input(POLL, "n_intervals"))
+def show_log(view, category, level, _):
+    if view == EVENTS_VIEW:
+        if category != ALL and category not in CATEGORIES:
+            raise PreventUpdate
+        return render_events(category), False, True, False
     if level not in LEVELS:
         raise PreventUpdate
-    return render(level)
+    return render(level), True, False, True
 
 
-@dash_app.callback(Output(DOWNLOAD, "data"), Input(DOWNLOAD_BUTTON, "n_clicks"), prevent_initial_call=True)
-def download_log(n_clicks):
+def _debug_label():
+    return "Debug logging (on until the next restart)" if is_debug() else "Debug logging"
+
+
+@dash_app.callback(Output(DEBUG_SWITCH, "label"), Input(DEBUG_SWITCH, "value"), prevent_initial_call=True)
+def switch_debug(enabled):
+    if enabled is None:
+        raise PreventUpdate
+    if bool(enabled) != is_debug():
+        set_debug(bool(enabled))
+        record(USER, "Debug logging %s from the log page", "on" if enabled else "off")
+    return _debug_label()
+
+
+@dash_app.callback(Output(DOWNLOAD, "data"), Input(DOWNLOAD_BUTTON, "n_clicks"), State(VIEW, "value"),
+                   State(CATEGORY, "value"), prevent_initial_call=True)
+def download_log(n_clicks, view, category):
+    """What the page shows: the events of the chosen category, or the log file."""
     if not n_clicks:
         raise PreventUpdate
+    if view == EVENTS_VIEW:
+        entries = EVENTS.entries(None if category in (None, ALL) else [category])
+        return dcc.send_string(as_text(entries), filename=f"psacc-events-{datetime.now():%Y-%m-%d-%H%M}.txt")
     return dcc.send_file(LOG_FILE, filename="psacc-activity.log")

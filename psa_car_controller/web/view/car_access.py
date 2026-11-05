@@ -2,12 +2,14 @@
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
 from dash import ALL, callback_context, dcc, html, no_update
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
+from psa_car_controller.common import events
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.remote_commands import FAILED, NOT_COMPATIBLE, PENDING_TIMEOUT, RC_WAKEUP_FORWARDED, \
     RETRIED, SUCCESS, TIMEOUT
@@ -117,6 +119,69 @@ def command_label(name):
     return COMMAND_LABELS.get(name, (name or "Command").strip("/"))
 
 
+ACTION_EVENTS = {"refresh": "status update asked for", "charge": "start or stop charging pressed",
+                 "precond": "climate pressed"}
+# phase of the automatic stop: icon, color, short text for the home page
+AUTO_STOP_PHASES = {
+    "watching": ("bi-hourglass-split", "text-body-secondary", "Automatic stop on"),
+    "waiting": ("bi-send", "text-primary", "Stop sent, waiting for the car…"),
+    "confirmed": ("bi-check-circle", "text-success", "Stopped automatically"),
+    "unconfirmed": ("bi-question-circle", "text-warning", "Stop sent, not confirmed yet"),
+    "retrying": ("bi-arrow-repeat", "text-warning", "Still charging, stop sent again"),
+    "gave_up": ("bi-exclamation-triangle", "text-danger", "Automatic stop failed"),
+}
+# a stop is shown this long after it was confirmed
+CONFIRMED_SHOWN_FOR = 6 * 3600
+
+
+def auto_stop_state(vin):
+    """The automatic stop of the car (charge_control.get_state), None without one or with nothing to show."""
+    state = read(lambda: app().chc.get(vin).get_state())
+    if not isinstance(state, dict) or state.get("phase") not in AUTO_STOP_PHASES:
+        return None
+    if state["phase"] == "confirmed":
+        try:
+            since = datetime.fromisoformat(state["since"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if (datetime.now(timezone.utc) - since).total_seconds() > CONFIRMED_SHOWN_FOR:
+            return None
+    return state
+
+
+def auto_stop_busy(state) -> bool:
+    """A stop of the automatic stop is on its way: the charge button waits for it as for one pressed by hand."""
+    if state is None:
+        return False
+    command = state.get("command") or {}
+    return state["phase"] == "waiting" or (state["phase"] in ("retrying", "unconfirmed") and
+                                           bool(command.get("pending")))
+
+
+def auto_stop_short(state):
+    """For the charge tile of the home page."""
+    if state is None:
+        return None
+    return AUTO_STOP_PHASES[state["phase"]][2]
+
+
+def auto_stop_line(state):
+    """What the automatic stop does now, with the answer of the car to the stop, for the charge page."""
+    if state is None:
+        return None
+    icon, color, _ = AUTO_STOP_PHASES[state["phase"]]
+    since = datetime.fromisoformat(state["since"])
+    lines = [html.Div([html.I(className=f"bi {icon} me-2"), state["message"]], className=color),
+             html.Small(["since ", ui.local_time(since, f"{since.astimezone():%H:%M}", "updated")],
+                        className="text-body-secondary d-block")]
+    command = (state.get("command") or {}).get("correlation_id") and state["phase"] != "watching" and \
+        read(lambda: current_command(app().myp.remote_client.commands, state["command"]["correlation_id"]))
+    if command:
+        # the same steps as for a command sent by hand: sent, car woken up, result
+        lines.append(html.Div(render_command(command, "Stop")[0], className="small mt-1"))
+    return html.Div(lines, className="auto-stop mt-2")
+
+
 def send_command(action, car: Car):
     """Run a remote command. Returns (message, ok, target state the car should report or None, correlation id)."""
     remote = app().myp.remote_client
@@ -129,6 +194,7 @@ def send_command(action, car: Car):
     if busy:
         # the car runs one command at a time; the wait ends with its answer or after PENDING_TIMEOUT
         return f"The car is still busy with: {command_label(busy['name'])}, try again shortly", False, None, None
+    events.record(events.USER, "Web page: %s", ACTION_EVENTS.get(action, action), vin=car.vin)
     try:
         with remote.track_commands() as sent:
             message, ok, target = _send_command(remote, action, car)

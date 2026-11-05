@@ -11,8 +11,10 @@ from psa_car_controller.psacc.model.car import Cars
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import insights_data, status_text, ui
-from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    is_charging, is_pending, read, remote_hint, remote_ready
+from psa_car_controller.common import events
+from psa_car_controller.psacc.application.charge_control import ChargeControl, describe_settings
+from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, auto_stop_busy, \
+    auto_stop_line, auto_stop_state, car_select, get_car, is_charging, is_pending, read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,9 @@ AUTO_FIELDS = "charge-auto-fields"
 LIMIT_VALUE = "charge-limit-value"
 CLEAR_TIME = "charge-clear-time"
 RECENT_DIV = "charge-recent"
+ESTIMATE = "charge-estimate"
+MARGIN = "charge-margin"
+MARGIN_HINT = "charge-margin-hint"
 RECENT_COUNT = 10
 DEFAULT_LIMIT = 80
 
@@ -37,12 +42,16 @@ def _status(car, pending):
         return dbc.Alert("No battery status from the car yet.", color="warning")
     elec = car.status.get_energy("Electric")
     charging_now = is_charging(car)
-    waiting = is_pending(pending, car.vin, "charge", charging_now)
+    auto_stop = auto_stop_state(car.vin)
+    by_hand = is_pending(pending, car.vin, "charge", charging_now)
+    by_auto_stop = not by_hand and auto_stop_busy(auto_stop)
+    waiting = by_hand or by_auto_stop
     text = status_text.charging_text(read(lambda: elec.charging.plugged), read(lambda: elec.charging.status),
                                      read(lambda: elec.charging.remaining_time)) or "–"
     power = status_text.charge_power_kw(read(lambda: elec.charging.charging_rate), car.battery_power,
                                         elec.level, elec.autonomy) if charging_now else None
-    label = [dbc.Spinner(size="sm", spinner_class_name="me-2"), "Waiting for car…"] if waiting else \
+    label = [dbc.Spinner(size="sm", spinner_class_name="me-2"),
+             "Auto-stop: waiting for car…" if by_auto_stop else "Waiting for car…"] if waiting else \
         [html.I(className="bi bi-stop-circle me-2" if charging_now else "bi bi-play-circle me-2"),
          "Stop charging" if charging_now else "Start charging"]
     remote = remote_ready()
@@ -54,6 +63,7 @@ def _status(car, pending):
         ]),
         action_button("charge", car.vin, label, color="danger" if charging_now else "primary",
                       className="w-100 mt-3 big-button", disabled=waiting or not remote),
+        auto_stop_line(auto_stop),
         remote_hint(remote),
     ], className="card-block")
 
@@ -83,12 +93,38 @@ def _settings(car):
                 dbc.Button(html.I(className="bi bi-x-lg"), id=CLEAR_TIME, n_clicks=0, color="secondary",
                            outline=True, title="No stop time"),
             ]),
-            html.Small("PSACC can only start or stop the charge: when the car reports the limit or the stop time is "
-                       "reached, it sends “stop”. The car must be reachable, and the battery may end a few % above "
-                       "the limit because the car reports its level every few minutes.",
+            html.Small("PSACC can only start or stop the charge: when the limit or the stop time is reached, it sends "
+                       "“stop”. The car must be reachable, and as it reports its level only every 10-15 minutes "
+                       "while charging, the battery may end a few % above the limit (see Advanced). A stop the car "
+                       "doesn't follow is sent again.",
                        className="text-body-secondary d-block mt-3"),
+            _advanced(chc),
         ], className="pt-3"), id=AUTO_FIELDS, is_open=enabled),
     ], className="card-block")
+
+
+def _advanced(chc):
+    return html.Details([
+        html.Summary("Advanced", className="text-body-secondary"),
+        html.Div([
+            dbc.Switch(id=ESTIMATE, value=chc.estimate, label="Estimate the level between two reports",
+                       className="mb-1"),
+            html.Small("Stops when the level, estimated from how fast it rose, reaches the limit: closer to it than "
+                       "waiting for the next report. How it was estimated is in the debug log.",
+                       className="text-body-secondary d-block mb-3"),
+            html.Label("Without the estimate, stop earlier by (%)", htmlFor=MARGIN),
+            dbc.Input(id=MARGIN, type="number", min=0, max=ChargeControl.MAX_STOP_MARGIN, step=1,
+                      value=chc.stop_margin, debounce=True, disabled=chc.estimate, className="margin-input"),
+            html.Small(id=MARGIN_HINT, children=_margin_hint(chc.percentage_threshold, chc.stop_margin),
+                       className="text-body-secondary d-block mt-1"),
+        ], className="pt-2"),
+    ], className="mt-3")
+
+
+def _margin_hint(limit, margin):
+    if not limit or limit >= 100 or not margin:
+        return "0: stops when the car reports the limit."
+    return ["Stops when the car reports ", ui.percent(max(limit - margin, 0)), " or more."]
 
 
 def _charge_row(charge, currency):
@@ -204,10 +240,31 @@ def _parse_time(value):
     return [hour, minute]
 
 
+@dash_app.callback(Output(MARGIN_HINT, "children"), Output(MARGIN, "disabled"),
+                   Input(LIMIT, "value"), Input(MARGIN, "value"), Input(ESTIMATE, "value"))
+def show_margin(limit, margin, estimate):
+    if estimate:
+        return "Off while the level is estimated.", True
+    return _margin_hint(limit, _parse_margin(margin)), False
+
+
+def _parse_margin(value):
+    """A whole number from 0 to MAX_STOP_MARGIN, None if it isn't one."""
+    try:
+        margin = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not margin.is_integer() or not 0 <= margin <= ChargeControl.MAX_STOP_MARGIN:
+        return None
+    return int(margin)
+
+
 @dash_app.callback(Output(SAVED, "children"), Output(SAVED, "className"),
                    Input(AUTO_SWITCH, "value"), Input(LIMIT, "value"), Input(STOP_TIME, "value"),
+                   Input(ESTIMATE, "value"), Input(MARGIN, "value"),
                    State(CAR_SELECT, "value"), prevent_initial_call=True)
-def save_settings(enabled, limit, stop_time, vin):
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def save_settings(enabled, limit, stop_time, estimate, margin, vin):
     """Every change is saved right away; "off" is no limit (100 %) and no stop hour, as charge control stores it."""
     chc = read(lambda: app().chc.get(vin))
     if chc is None or limit is None:
@@ -216,12 +273,21 @@ def save_settings(enabled, limit, stop_time, vin):
         stop = _parse_time(stop_time) if enabled else None
     except ValueError:
         return "Invalid time", "save-status ms-auto text-danger"
+    stop_margin = _parse_margin(margin)
+    if stop_margin is None:
+        return f"Earlier by: 0 to {ChargeControl.MAX_STOP_MARGIN}", "save-status ms-auto text-danger"
     threshold = int(limit) if enabled else 100
+    estimate = bool(estimate)
     current_stop = chc.get_stop_hour()
-    if threshold == chc.percentage_threshold and stop == (current_stop if current_stop and any(current_stop) else None):
+    if threshold == chc.percentage_threshold and stop == (current_stop if current_stop and any(
+            current_stop) else None) and estimate == chc.estimate and stop_margin == chc.stop_margin:
         raise PreventUpdate
     chc.percentage_threshold = threshold
     chc.set_stop_hour(stop)
+    chc.set_estimate(estimate, stop_margin)
     app().chc.save_config()
-    logger.info("charge control of %s: limit %s, stop %s", vin, threshold, stop)
+    logger.info("charge control of %s: limit %s, stop %s, estimate %s, margin %s", vin, threshold, stop, estimate,
+                stop_margin)
+    events.record(events.USER, "Web page: automatic stop %s",
+                  describe_settings(threshold, stop, estimate, stop_margin), vin=vin)
     return [html.I(className="bi bi-check2 me-1"), "Saved"], "save-status ms-auto saved"

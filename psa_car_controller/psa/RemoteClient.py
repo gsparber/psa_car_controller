@@ -22,12 +22,14 @@ from psa_car_controller.psa.constants import INPROGRESS, DEFAULT_PRECONDITIONING
     DELAYED_CHARGE, REMOTE_URL
 from psa_car_controller.psa import precond_programs
 from psa_car_controller.psa.mqtt_client import MqttClient
-from psa_car_controller.psa.mqtt_event import VehicleEvents, CHANGED, OUT_OF_ORDER, parse_event_date, \
-    rest_charging_status
+from psa_car_controller.psa.mqtt_event import VehicleEvents, CHANGED, OUT_OF_ORDER, describe_event, \
+    parse_event_date, rest_charging_status
 from psa_car_controller.psa.mqtt_request import MQTTRequest
 from psa_car_controller.psa.oauth import OpenIdCredentialManager
 from psa_car_controller.psa.remote_commands import RemoteCommand, RemoteCommands, RC_SUCCESS, \
-    RC_TOKEN_EXPIRED, RC_WAKEUP_FORWARDED, REASON_NOT_COMPATIBLE, FAILED, RETRIED
+    RC_TOKEN_EXPIRED, RC_WAKEUP_FORWARDED, REASON_NOT_COMPATIBLE, FAILED, RETRIED, SUCCESS, WOKEN_UP, \
+    describe_request
+from psa_car_controller.common import events
 from psa_car_controller.common.utils import RateLimitException, rate_limit, parse_hour, TIMEOUT_IN_S
 from psa_car_controller.psa.otp.otp import ConfigException, save_otp, load_otp
 
@@ -175,7 +177,10 @@ class RemoteClient:
             self._mqtt_connect_refused = True
             self.mqtt_auth_failures += 1
             logger.warning("MQTT credentials refused %d times in a row", self.mqtt_auth_failures)
+            events.record(events.MQTT, "Connection refused: %s (%d times in a row)", reason_code,
+                          self.mqtt_auth_failures, level=logging.WARNING)
             return
+        events.record(events.MQTT, "Connected")
         self.mqtt_auth_failures = 0
         self.mqtt_last_connect = datetime.now(timezone.utc)
         # the broker took the token: a refresh which failed during an outage is no problem anymore,
@@ -191,6 +196,7 @@ class RemoteClient:
     def _on_mqtt_disconnect(self, client, userdata, flags, reason_code, *_):  # pylint: disable=unused-argument
         # the client reconnects on its own, so report the reason on a single line
         logger.warning("MQTT disconnected: %s", reason_code)
+        events.record(events.MQTT, "Disconnected: %s", reason_code, level=logging.WARNING)
         refused, self._mqtt_connect_refused = self._mqtt_connect_refused, False
         # paho 2 reports a lost connection (socket closed, no CONNACK) only as "Unspecified error";
         # a keepalive timeout is a network problem, a refused CONNACK is counted in on_connect
@@ -227,8 +233,29 @@ class RemoteClient:
         try:
             self._handle_command_answer(command, name, return_code, reason)
         finally:
+            # after the handling, which can send the command again
+            self._record_answer(command, return_code, reason)
             if command is not None:
                 self._notify_command(command)
+
+    @staticmethod
+    def _record_answer(command: Optional[RemoteCommand], return_code, reason):
+        if command is None:
+            events.record(
+                events.COMMAND,
+                "Answer %s to a command sent by someone else or over an hour ago",
+                return_code)
+            return
+        label = describe_request(command.request)
+        if command.status == SUCCESS:
+            events.record(events.COMMAND, "%s: done", label, vin=command.vin)
+        elif command.status == WOKEN_UP:
+            events.record(events.COMMAND, "%s: the server wakes the car up, waiting for its answer", label,
+                          vin=command.vin)
+        else:
+            events.record(events.COMMAND, "%s: %s (code %s%s)", label, command.status, return_code,
+                          f", {command.error or reason}" if command.error or reason else "", vin=command.vin,
+                          level=logging.WARNING)
 
     def _handle_command_answer(self, command, name, return_code, reason):
         if return_code == RC_SUCCESS:
@@ -286,6 +313,7 @@ class RemoteClient:
         if result == OUT_OF_ORDER:
             return False
         if result == CHANGED:
+            events.record(events.MQTT, "Event: %s", describe_event(data), vin=vin)
             programs = (data.get("precond_state") or {}).get("programs")
             if programs:
                 self._store_precond_programs(vin, programs)
@@ -325,6 +353,8 @@ class RemoteClient:
                             return
                         delay = self._api_update_delay(vin)
                         logger.warning("charge begin but API isn't updated, wake up %s in %d s", vin, delay)
+                        events.record(events.MQTT, "Charging on MQTT, not in the API: wake-up in %d s", delay,
+                                      vin=vin)
                         timer = threading.Timer(delay, self._delayed_api_update, args=[vin])
                         timer.daemon = True
                         self._api_update_timers[vin] = timer
@@ -439,6 +469,8 @@ class RemoteClient:
     def publish(self, mqtt_request: MQTTRequest) -> bool:
         if not self._refresh_remote_token():
             logger.error("Can't publish %s: remote token refresh failed", mqtt_request.topic)
+            events.record(events.COMMAND, "%s: not sent, the remote token can't be refreshed",
+                          describe_request(mqtt_request), vin=mqtt_request.vin, level=logging.ERROR)
             return False
         message = mqtt_request.get_message_to_json(self.remoteCredentials.access_token)
         logger.debug("mqtt publish: %s %s", mqtt_request.topic, message)
@@ -448,6 +480,8 @@ class RemoteClient:
         if tracked is not None:
             tracked.append(mqtt_request.correlation_id)
         self.mqtt_client.publish(mqtt_request.topic, message)
+        events.record(events.COMMAND, "%s: sent%s", describe_request(mqtt_request),
+                      " again, the remote token was expired" if mqtt_request.retried else "", vin=mqtt_request.vin)
         return True
 
     def mqtt_request(self, vin, req_parameters, topic):

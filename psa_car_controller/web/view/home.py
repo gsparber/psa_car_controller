@@ -13,8 +13,9 @@ from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web import units
 from psa_car_controller.web.app import dash_app
 from psa_car_controller.web.view import status_text, ui
-from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, car_select, get_car, \
-    is_charging, is_pending, is_preconditioning, maintenance, read, remote_hint, remote_ready
+from psa_car_controller.web.view.car_access import PENDING_STORE, action_button, app, auto_stop_busy, \
+    auto_stop_short, auto_stop_state, car_select, get_car, is_charging, is_pending, is_preconditioning, maintenance, \
+    read, remote_hint, remote_ready
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,11 @@ def _soc_ring(level, range_km, unit=units.KM):
     )
 
 
-def _tile(action, vin, icon, title, subtitle, active=False, pending=False, disabled=False):
+def _tile(action, vin, icon, title, subtitle, active=False, pending=False, disabled=False,
+          pending_text="Waiting for car…"):
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     if pending:
-        subtitle = [dbc.Spinner(size="sm", spinner_class_name="me-1"), "Waiting for car…"]
+        subtitle = [dbc.Spinner(size="sm", spinner_class_name="me-1"), pending_text]
     return action_button(action, vin,
                          [html.I(className=f"bi {icon} tile-icon"),
                           html.Div(title, className="tile-title"),
@@ -125,9 +127,17 @@ def _tiles(car: Car, remote, pending):
         precond_label = status_text.precond_failure_text(failure)
     tiles = []
     if car.has_battery():
+        charge_text = "Charging" if charging_now else "Not charging"
+        auto_stop = auto_stop_state(car.vin)
+        if auto_stop is not None:
+            # while it only watches the charge, it's an addition; a stop on its way says more than "Charging"
+            charge_text = f"{charge_text} · auto-stop on" if auto_stop["phase"] == "watching" \
+                else auto_stop_short(auto_stop)
+        by_hand = is_pending(pending, car.vin, "charge", charging_now)
+        by_auto_stop = not by_hand and auto_stop_busy(auto_stop)
         tiles.append(_tile("charge", car.vin, "bi-ev-station", "Stop charging" if charging_now else "Charge now",
-                           "Charging" if charging_now else "Not charging", active=charging_now,
-                           pending=is_pending(pending, car.vin, "charge", charging_now), disabled=not remote))
+                           charge_text, active=charging_now, pending=by_hand or by_auto_stop, disabled=not remote,
+                           pending_text="Auto-stop: waiting for car…" if by_auto_stop else "Waiting for car…"))
     tiles.append(_tile("precond", car.vin, "bi-snow", "Climate", precond_label or "–", active=precond_on,
                        pending=is_pending(pending, car.vin, "precond", precond_on), disabled=not remote))
     return html.Div([html.Div(tiles, className="home-tiles"), remote_hint(remote)])

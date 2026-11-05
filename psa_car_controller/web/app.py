@@ -91,9 +91,14 @@ class RequestPrefixConfig(AttributeDict):
     Code outside of a request sees the prefix given at start."""
 
     def set_request_prefixes(self, requests_pathname_prefix, url_base_pathname, assets_external_path):
-        _request_prefixes.set({"requests_pathname_prefix": requests_pathname_prefix,
-                               "url_base_pathname": url_base_pathname,
-                               "assets_external_path": assets_external_path})
+        """Returns the token to undo it with reset_request_prefixes."""
+        return _request_prefixes.set({"requests_pathname_prefix": requests_pathname_prefix,
+                                      "url_base_pathname": url_base_pathname,
+                                      "assets_external_path": assets_external_path})
+
+    @staticmethod
+    def reset_request_prefixes(token):
+        _request_prefixes.reset(token)
 
     def __getitem__(self, key):
         prefixes = _request_prefixes.get()
@@ -173,14 +178,19 @@ class MyProxyFix(ProxyFix):
     def __call__(self, environ, start_response):
         prefix = environ.get("HTTP_X_INGRESS_PATH") or environ.get("HTTP_X_FORWARDED_PREFIX") or self.static_prefix
         if prefix == "/":
-            self.dash_app.config.set_request_prefixes("", None, prefix)
+            token = self.dash_app.config.set_request_prefixes("", None, prefix)
         else:
             environ["HTTP_X_FORWARDED_PREFIX"] = prefix
             if not prefix.endswith("/"):
                 prefix += "/"
-            self.dash_app.config.set_request_prefixes(prefix, prefix, prefix)
+            token = self.dash_app.config.set_request_prefixes(prefix, prefix, prefix)
         environ["PATH_INFO"] = legacy_page_path(environ.get("PATH_INFO", ""))
-        return super().__call__(environ, start_response)
+        try:
+            return super().__call__(environ, start_response)
+        finally:
+            # a thread that handles requests among other work (a test client, a WSGI server reusing threads) must
+            # not keep the prefix of the last request
+            self.dash_app.config.reset_request_prefixes(token)
 
 
 def start_app(*args, **kwargs):

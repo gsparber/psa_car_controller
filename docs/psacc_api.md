@@ -37,6 +37,15 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
    http://localhost:5000/charge_control?vin=YOURVIN&percentage=80 
 
+   The car reports its level only every 10-15 minutes while charging, so the charge ends a few % above the limit.
+   Optional, also on the charge page under Advanced:
+   - `estimate=1`: stop when the level estimated from how fast it rose reaches the limit (`0`: off, the default).
+   - `margin=5`: without the estimate, stop 5 % before the limit, at 75 % for 80 % (0 to 20, 0 by default).
+
+   The answer has `auto_stop`: what the automatic stop does now (`phase`: `watching`, `waiting`, `confirmed`,
+   `unconfirmed`, `retrying`, `gave_up`, with `message`, `since` and the last charge `command`), `null` while it has
+   nothing to do.
+
 6. See the dashboard (only if record is enabled)
 
    http://localhost:5000
