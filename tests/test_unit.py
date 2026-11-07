@@ -368,7 +368,8 @@ class TestUnit(unittest.TestCase):
             return model.reg[5:8]
 
         models = CarModelRepository().models
-        self.assertEqual(len(models), 153)
+        # 154 with the e-Expert of #1310
+        self.assertEqual(len(models), 154)
         corrected = []
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cars.json")
