@@ -111,6 +111,30 @@ class TestUnit(unittest.TestCase):
         assert model.battery_power == 73
         assert CarModelRepository().find_model_by_name("E-3008 GT").reg == "VR3KCZKZXT"
 
+    def test_car_model_without_its_check_digit(self):
+        # #1309: a Peugeot e-3008 73 kWh VR3KCZKZ9S, the list only has other 9th letters of it
+        model = CarModelRepository().find_model_by_vin("VR3KCZKZ9S1234567")
+        self.assertEqual(73, model.battery_power)
+        self.assertTrue(model.reg.startswith("VR3KCZKZ") and model.reg.endswith("S"))
+
+    def test_exact_prefix_comes_first(self):
+        self.assertEqual("e-5008 Single Motor 73 kWh", CarModelRepository().find_model_by_vin("VR3KCZKZ4R1").name)
+
+    def test_other_year_isnt_taken(self):
+        # the 10th letter is the model year: a 2023 e-3008 (P) is unknown, not the 2024 one
+        self.assertEqual("unknown", CarModelRepository().find_model_by_vin("VR3KCZKZ9P1234567").name)
+
+    def test_grandland_phev(self):
+        # #1188, the same 195 hp plug-in hybrid (engine BDGK) as the 3008 of VR3KBDGK9S
+        car = Car("VXKKBDGK9S1234567", "vehicle_id", "Opel")
+        self.assertEqual("Grandland Plug-in Hybrid 195", car.label)
+        self.assertEqual((17.8, 55), (car.battery_power, car.fuel_capacity))
+        self.assertFalse(car.is_thermal())
+
+    def test_e_expert_2024(self):
+        model = CarModelRepository().find_model_by_vin("VF3VTZKU7R1234567")
+        self.assertEqual(68, model.battery_power)
+
     def test_car_model_former_regex_entries(self):
         expected = {
             "VF3CCHMRPJ": ("208(2017-2019)", 0, 44),
@@ -368,8 +392,8 @@ class TestUnit(unittest.TestCase):
             return model.reg[5:8]
 
         models = CarModelRepository().models
-        # 154 with the e-Expert of #1310
-        self.assertEqual(len(models), 154)
+        # 154 with the e-Expert of #1310, 155 with the Grandland PHEV of #1188
+        self.assertEqual(len(models), 155)
         corrected = []
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "cars.json")

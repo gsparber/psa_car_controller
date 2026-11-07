@@ -24,6 +24,13 @@ class CarModelRepository(metaclass=Singleton):
         for car_model in self.models:
             if car_model.match(vin):
                 return car_model
+        # The 9th letter of a VIN is a check digit, it changes from car to car of the same model: the list has the
+        # e-3008 of 2024 eight times for that reason. Without a model for the whole prefix, one that differs only
+        # there is taken (the same models in the list differ by at most 0.5 kWh then).
+        for car_model in self.models:
+            if car_model.match_but_check_digit(vin):
+                logger.info("Car model of %s… found without its check digit: %s", vin[:8], car_model.name)
+                return car_model
         return None
 
     def find_model_by_vin(self, vin) -> CarModel:

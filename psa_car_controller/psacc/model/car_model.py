@@ -31,6 +31,13 @@ class CarModel:
             return False
         return vin.startswith(self.reg)
 
+    def match_but_check_digit(self, vin):
+        """Like match for a prefix of 10 letters, but any 9th letter (the check digit of the VIN)."""
+        reg = (self.reg or "").strip()
+        if len(reg) != 10 or not isinstance(vin, str) or len(vin) < 10:
+            return False
+        return vin[:8] == reg[:8] and vin[9] == reg[9]
+
 
 class ElecModel(CarModel):
     fuel_capacity = 0
