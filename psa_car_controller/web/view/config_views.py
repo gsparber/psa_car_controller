@@ -14,6 +14,7 @@ from psa_car_controller.psa.otp.otp import ActivationException, FAQ_ACTIVATION_U
 from psa_car_controller.psa.RemoteClient import SmsRequestException
 from psa_car_controller.psa.setup.apk_parser import UnknownCountryError
 from psa_car_controller.psa.setup.countries import BRAND_COUNTRIES, countries_of_brand, normalize_country_code
+from psa_car_controller.psa.setup import headless_oauth
 from psa_car_controller.psa.setup.headless_oauth import HeadlessOAuthError, get_oauth_code_headless
 from psa_car_controller.psa.setup.worker_oauth import (WorkerLoginError, WorkerLoginRejected,
                                                        get_oauth_code_from_worker, is_insecure_worker_url, worker_host)
@@ -370,6 +371,12 @@ def _login(app_name, email, password, countrycode, report_step):
         if _login_worker_url():
             report_step(STEP_WORKER)
         code, worker_error = _code_from_worker(auth_url, email, password)
+        if code is None and not headless_oauth.browser_installed():
+            # the -slim images: nothing to start, and no point in a step that waits for it
+            logger.info("No local browser in this installation, the login is left to the manual link")
+            raise JobFailure("There is no browser in this installation (e.g. a -slim image) to log in automatically. "
+                             "Please complete the login manually, or set up a login worker:",
+                             LoginDetails(LOGIN_MANUAL, auth_url, worker_error))
         if code is None and not _local_browser_allowed():
             logger.info("The local browser is off (local browser in [Login Worker]), the login is left to the manual "
                         "link")

@@ -396,6 +396,23 @@ class TestLoginOrder(unittest.TestCase):
                 for expected in (error, "local browser is off", "Go to login"):
                     self.assertIn(expected, text)
 
+    def test_without_playwright_the_manual_link_comes_right_away(self):
+        # the -slim Docker images have no playwright: no step that waits for a browser, a message that says why
+        self.config.Login_Worker.url = None
+        with patch("psa_car_controller.psa.setup.headless_oauth.playwright_sync", None):
+            result = self.login()
+        self.headless.assert_not_called()
+        text = text_of(result)
+        for expected in ("no browser in this installation", "Go to login"):
+            self.assertIn(expected, text)
+
+    def test_without_playwright_a_worker_still_logs_in(self):
+        self.worker.return_value = "worker-code"
+        with patch("psa_car_controller.psa.setup.headless_oauth.playwright_sync", None):
+            result = self.login()
+        self.setup.connect.assert_called_once_with("worker-code")
+        self.assertEqual("success", result.color)
+
     def test_without_local_browser_and_worker_only_the_manual_link(self):
         self.config.Login_Worker.local_browser = False
         self.config.Login_Worker.url = None

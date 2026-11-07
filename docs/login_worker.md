@@ -54,7 +54,8 @@ read them and log in to your account, and with it locate your car.
 ## Raspberry Pi and other small machines
 
 The local login browser is Chromium: on a Raspberry Pi with 2 GB, next to other services, it can take minutes and
-most of the memory. To keep it off the Pi:
+most of the memory. The `-slim` Docker images (e.g. `next-slim`, see [Docker](Docker.md#slim-image)) don't have it at
+all and are less than half the size; the steps below work with both. To keep it off the Pi:
 
 1. Run stelloauth on another, stronger machine you control (a PC or NAS on your network). On the Pi itself it wouldn't
    help: it starts a browser too.

@@ -40,8 +40,15 @@ A build from a branch has no release version. These optional arguments of `docke
 |-------------------|---------------------------------------------------------------------------------------------|
 |PSACC_GIT_VERSION  | output of `git describe --tags --always --dirty`, letters, digits, `.`, `_` and `-` only     |
 |PSACC_GIT_REPO_URL | `https://` URL of the repository holding that commit; without it the version has no link     |
+|PSACC_BROWSER      | `false`: no Chromium and no playwright, see Slim image below (`true` by default)              |
 
 Build the wheel in `dist/` from the same commit, else the image shows a commit it doesn't contain. Only pass the URL if the commit is pushed, else the link ends on a 404. Without Docker, set the same names as environment variables.
 
+### Slim image
+The images of a branch come in two variants: `<branch>` (e.g. `next`) and `<branch>-slim` (e.g. `next-slim`). The slim
+one has no Chromium and no playwright: 854 MB instead of 1.92 GB (arm64), for small machines such as a Raspberry Pi.
+Everything works the same, except the automatic login in a local browser: the login goes through a
+[login worker](login_worker.md) on another machine, or the manual link (open it in a browser on your PC and paste the
+code). A login is only needed once, and again when Stellantis rejects the stored refresh token.
 
-
+To build it yourself: `docker build --build-arg PSACC_BROWSER=false .`

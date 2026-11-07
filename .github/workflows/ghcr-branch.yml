@@ -27,19 +27,26 @@ jobs:
       contents: read
 
   # each platform builds on a native runner: arm64 under QEMU took well over 25 min
-  # (scipy, pandas and playwright emulated), natively it is as fast as amd64
+  # (scipy, pandas and playwright emulated), natively it is as fast as amd64.
+  # Two variants: with the browser for the headless login, and -slim without playwright and Chromium
   build:
-    name: Build ${{ matrix.platform }}
+    name: Build ${{ matrix.platform }} ${{ matrix.variant }}
     needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux/amd64, linux/arm64]
+        variant: [full, slim]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
+          - variant: full
+            browser: 'true'
+          - variant: slim
+            browser: 'false'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,7 +67,7 @@ jobs:
         id: prep
         run: |
           echo "image=ghcr.io/$(echo "${{ github.repository_owner }}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-          echo "pair=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+          echo "pair=$(echo '${{ matrix.platform }}' | tr '/' '-')-${{ matrix.variant }}" >> "$GITHUB_OUTPUT"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Login to GHCR
@@ -76,6 +83,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           build-args: |
+            PSACC_BROWSER=${{ matrix.browser }}
             PSACC_GIT_VERSION=${{ steps.git.outputs.version }}
             PSACC_GIT_REPO_URL=${{ github.server_url }}/${{ github.repository }}
           outputs: type=image,name=${{ steps.prep.outputs.image }},push-by-digest=true,name-canonical=true,push=true
@@ -94,17 +102,25 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # joins the per-platform images into one multi-arch tag
+  # joins the per-platform images of a variant into one multi-arch tag: <branch> and <branch>-slim
   merge:
-    name: Push multi-arch tags
+    name: Push multi-arch tags ${{ matrix.variant }}
     runs-on: ubuntu-latest
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: full
+            suffix: ''
+          - variant: slim
+            suffix: '-slim'
     steps:
       - name: Download digests
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ${{ runner.temp }}/digests
-          pattern: digests-*
+          pattern: digests-*-${{ matrix.variant }}
           merge-multiple: true
       - name: Prepare
         id: prep
@@ -112,9 +128,10 @@ jobs:
           IMAGE=ghcr.io/$(echo "${{ github.repository_owner }}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
           # docker tags allow [a-z0-9_.-] only: feature/modern-ui -> feature-modern-ui
           TAG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g' | cut -c1-120)
+          SUFFIX='${{ matrix.suffix }}'
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "tags=-t ${IMAGE}:${TAG} -t ${IMAGE}:${TAG}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}${SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "tags=-t ${IMAGE}:${TAG}${SUFFIX} -t ${IMAGE}:${TAG}-${GITHUB_SHA::7}${SUFFIX}" >> "$GITHUB_OUTPUT"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Login to GHCR

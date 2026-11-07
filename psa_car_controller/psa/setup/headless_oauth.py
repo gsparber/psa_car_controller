@@ -14,6 +14,12 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def browser_installed() -> bool:
+    """False without playwright, as in the -slim Docker images: the headless login can't even start then."""
+    return playwright_sync is not None
+
+
 # Selectors used by the Gigya login form
 EMAIL_SELECTOR = '#gigya-login-form input[name="username"]'
 PASSWORD_SELECTOR = '#gigya-login-form input[name="password"]'  # nosec dodgy: password
