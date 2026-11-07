@@ -1,3 +1,6 @@
+import json
+import shutil
+import subprocess
 import time
 import unittest
 from types import SimpleNamespace
@@ -157,3 +160,44 @@ class TestRunHeadlessOauth(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class TestRequireJsTimeout(unittest.TestCase):
+    """A slow machine took more than the 7 s of RequireJS on the ForgeRock pages, which then stayed blank."""
+
+    @staticmethod
+    def require_after(path, page_script):
+        script = (f"globalThis.window = globalThis; globalThis.location = {{pathname: {json.dumps(path)}}};"
+                  f"require('vm').runInThisContext({json.dumps(headless_oauth.REQUIREJS_NO_TIMEOUT)});"
+                  f"{page_script};"
+                  # node has a require function of its own: only a config object comes from the script
+                  "console.log(JSON.stringify(typeof window.require === 'object' ? window.require : 'not set'))")
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True, timeout=30)
+        return json.loads(result.stdout)
+
+    def test_config_of_the_page_gets_no_timeout(self):
+        self.assertEqual({"baseUrl": "/am/x", "waitSeconds": 0},
+                         self.require_after("/am/XUI/", "window.require = {baseUrl: '/am/x'}"))
+
+    def test_a_timeout_the_page_sets_stays(self):
+        self.assertEqual({"waitSeconds": 30}, self.require_after("/am/XUI/", "window.require = {waitSeconds: 30}"))
+
+    def test_without_config_of_the_page(self):
+        self.assertEqual({"waitSeconds": 0}, self.require_after("/am/XUI/", ""))
+
+    def test_other_pages_are_left_alone(self):
+        self.assertEqual("not set", self.require_after("/login/", ""))
+
+    def test_registered_for_every_page(self):
+        context = MagicMock()
+        browser = MagicMock()
+        browser.new_context.return_value = context
+        context.new_page.side_effect = RuntimeError("stop here")
+        playwright = MagicMock()
+        playwright.sync_playwright.return_value.__enter__.return_value = MagicMock()
+        with patch.object(headless_oauth, "playwright_sync", playwright), \
+                patch.object(headless_oauth, "_launch_browser", return_value=(browser, True)):
+            with self.assertRaises(Exception):
+                headless_oauth._run_headless_oauth("https://example.com", "a@b.c", "pw", "mymop")
+        context.add_init_script.assert_called_once_with(headless_oauth.REQUIREJS_NO_TIMEOUT)

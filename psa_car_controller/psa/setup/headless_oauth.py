@@ -32,15 +32,35 @@ AUTHORIZE_SELECTORS = [
     'input[type="submit"][value="Erlauben"]',
     'input[type="submit"][value="Autoriser"]',
     '#cvs_from input[type="submit"]',
+    # Stellantis's "Log in complete, ready to explore?" page (seen on Vauxhall, 2026-10)
+    'input[type="submit"][value="CONTINUE"]',
+    '#cvs_form input[type="submit"]',
 ]
 
-TIMEOUT_MS = 60_000
+# Generous: on a small Home Assistant VM or a Raspberry Pi the sign-in page alone can take a minute and a half
+TIMEOUT_MS = 120_000
 # Whole flow, page load included: some brands need about 2 minutes for login and consent
 LOGIN_TIMEOUT_S = 180
 
 # Page Stellantis redirects to when the flow fails, e.g. an expired consent context
 OP_ERROR_PAGE = "OPErrorPage.php"
 SESSION_EXPIRED_MESSAGE = "The login took too long and the session expired, please try again."
+
+# The ForgeRock pages (/am/...) load their scripts with RequireJS, which gives up when no new script arrives within
+# 7 s and leaves the page blank ("Loading..."). A busy Home Assistant VM can be that slow, so switch the limit off.
+# The pages set their own config with `var require = {...}`, so add the setting to whatever they set.
+REQUIREJS_NO_TIMEOUT = """(function () {
+  if (location.pathname.indexOf('/am/') !== 0) { return; }
+  var value = {waitSeconds: 0};
+  Object.defineProperty(window, 'require', {
+    configurable: true,
+    get: function () { return value; },
+    set: function (v) {
+      if (v && typeof v === 'object' && !('waitSeconds' in v)) { v.waitSeconds = 0; }
+      value = v;
+    }
+  });
+})();"""
 
 
 class HeadlessOAuthError(Exception):
@@ -210,6 +230,10 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
     def on_console(msg):
         console_logs.append(f"[{msg.type}] {msg.text}")
 
+    def on_page_error(error):
+        # Uncaught errors (such as a script loader giving up) don't reach the console handler.
+        console_logs.append(f"[pageerror] {str(error).splitlines()[0] if str(error) else error!r}")
+
     def on_response(response):
         logger.debug("Response: %s %s", response.status, response.url)
         console_logs.append(f"[response] {response.status} {response.url}")
@@ -220,6 +244,7 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
     with playwright_sync.sync_playwright() as p:
         browser, headless = _launch_browser(p)
         context = browser.new_context()
+        context.add_init_script(REQUIREJS_NO_TIMEOUT)
         pages = []
 
         def on_popup(popup):
@@ -228,6 +253,7 @@ def _run_headless_oauth(auth_url: str, email: str, password: str,  # pylint: dis
         try:
             page = context.new_page()
             page.on("console", on_console)
+            page.on("pageerror", on_page_error)
             page.on("response", on_response)
             page.on("popup", on_popup)
             deadline = time.time() + LOGIN_TIMEOUT_S
