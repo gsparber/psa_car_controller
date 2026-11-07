@@ -410,6 +410,9 @@ class RemoteClient:
             if environ.get("MQTT_LOG", "0") == "1":
                 self.mqtt_client.enable_logger(logger=logger)
             if self._refresh_remote_token():
+                # The refresh skips a token under MQTT_TOKEN_TTL old and then doesn't sign the new client in,
+                # so a restart soon after one (as at the end of setup) was refused with rc 5 until the TTL ran out.
+                self.mqtt_client.username_pw_set("IMA_OAUTH_ACCESS_TOKEN", self.remoteCredentials.access_token)
                 self.mqtt_client.tls_set_context()
                 self.mqtt_client.on_connect = self.__on_mqtt_connect
                 self.mqtt_client.on_message = self._on_mqtt_message

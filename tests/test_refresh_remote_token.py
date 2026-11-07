@@ -190,6 +190,24 @@ class TestRefreshRemoteToken(unittest.TestCase):
             remote_client.start()
         self.assertIsNone(remote_client.token_error)
 
+    def test_restart_soon_after_a_refresh_still_signs_in_to_mqtt(self):
+        # GIVEN a remote client whose token was refreshed a moment ago (as when the setup screens
+        # sign in and then restart remote control after the SMS step)
+        remote_client = get_remote_client()
+        remote_client.remoteCredentials.access_token = "access_token"
+        remote_client.remoteCredentials.refresh_token = "new_remote_refresh_token"
+        remote_client.load_otp = MagicMock(return_value=True)
+
+        # WHEN remote control starts again, with a new mqtt client
+        with mock.patch("psa_car_controller.psa.RemoteClient.MqttClient") as client_class, \
+                mock.patch.object(RemoteClient, "_RemoteClient__schedule_keep_mqtt"):
+            remote_client.start()
+
+        # THEN the new client still gets the access token, without another refresh
+        # (it used to connect without one and the broker refused it with rc 5 until the TTL ran out)
+        client_class.return_value.username_pw_set.assert_called_once_with("IMA_OAUTH_ACCESS_TOKEN", "access_token")
+        remote_client.manager.refresh_token_now.assert_not_called()
+
     def test_keepalive_period_is_well_under_token_lifetime(self):
         # Regression test for Sentry issue 150805222 / the daily invalid_grant: the remote
         # refresh token lives ~24h and __keep_mqtt is the only periodic refresh on an idle
