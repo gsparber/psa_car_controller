@@ -77,7 +77,7 @@ class TestPagesLeaveTheDateToTheBrowser(unittest.TestCase):
         updated = home._updated(START, 300)
         self.assertEqual([START.isoformat()], dates(updated))
         self.assertEqual("updated", find_all(updated, html.Time)[0].to_plotly_json()["props"]["data-format"])
-        self.assertEqual(f"updated  {status_text.format_updated(START)}  (5 min ago)", text(updated))
+        self.assertEqual(f"car reported  {status_text.format_updated(START)}  (5 min ago)", text(updated))
 
     def test_home_updated_without_date(self):
         get_car_access()

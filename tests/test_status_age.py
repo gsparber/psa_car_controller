@@ -122,8 +122,28 @@ class TestHomeShowsAge(unittest.TestCase):
 
     def test_status_without_date(self):
         hero = self.hero(get_car())
-        self.assertNotIn("updated", text(hero))
+        self.assertNotIn("reported", text(hero))
         self.assertNotIn("ago", text(hero))
+
+    def checked(self, car, last_success):
+        client = MagicMock()
+        client.status_requests.return_value.last_success = last_success
+        with patch.object(self.home, "app", return_value=MagicMock(myp=client)):
+            return text(self.hero(car))
+
+    def test_age_of_the_data_apart_from_the_last_check(self):
+        # a parked car: PSA answered 5 minutes ago with what the car sent 35 hours ago
+        car = get_car(datetime.now(timezone.utc) - timedelta(hours=35))
+        hero = self.checked(car, datetime.now(timezone.utc) - timedelta(minutes=5))
+        self.assertIn("car reported", hero)
+        self.assertIn("35 h ago", hero)
+        self.assertIn("checked 5 min ago", hero)
+
+    def test_never_checked(self):
+        car = get_car(datetime.now(timezone.utc) - timedelta(hours=1))
+        hero = self.checked(car, None)
+        self.assertIn("car reported", hero)
+        self.assertNotIn("checked", hero)
 
 
 class TestApiShowsAge(unittest.TestCase):

@@ -1,5 +1,6 @@
 """Home page: the car at a glance plus the remote actions, laid out for phones first."""
 import logging
+from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
 from dash import dcc, html
@@ -66,12 +67,33 @@ def _picture(car: Car):
 
 
 def _updated(updated_at, age_seconds):
-    """Time and age of the data ("updated 10:12 (5 min ago)"), None without a date."""
+    """When the car last sent its data ("car reported 10:12 (5 min ago)"), None without a date.
+
+    Not when PSACC last asked: a parked car sends nothing new for days while PSA answers every refresh."""
     text = status_text.format_updated(updated_at)
     if text is None:
         return None
     age = status_text.format_age(age_seconds)
-    return ["updated ", ui.local_time(updated_at, text, "updated"), f" ({age})" if age else ""]
+    return html.Span(["car reported ", ui.local_time(updated_at, text, "updated"), f" ({age})" if age else ""],
+                     title="When the car last sent its data to Stellantis")
+
+
+def _checked(vin):
+    """When PSA last answered with a status ("checked 5 min ago"), None while it never did."""
+    last_success = read(lambda: app().myp.status_requests(vin).last_success)
+    if not isinstance(last_success, datetime):
+        return None
+    age = status_text.format_age((datetime.now(timezone.utc) - last_success).total_seconds())
+    return html.Span(f"checked {age}", title="When PSACC last got the status from Stellantis") if age else None
+
+
+def _subtitle(car: Car, age, unit):
+    """Like "Parked · car reported 10:12 (35 h ago) · checked 5 min ago", without the parts that are unknown."""
+    state = status_text.car_state_text(read(lambda: car.status.ignition.type),
+                                       read(car.status.is_moving),
+                                       read(lambda: car.status.kinetic.speed), unit)
+    parts = [part for part in (state, _updated(status_updated_at(car.status), age), _checked(car.vin)) if part]
+    return [piece for part in parts for piece in (" · ", part)][1:] or None
 
 
 def _hero(car: Car, remote):
@@ -79,11 +101,7 @@ def _hero(car: Car, remote):
     fuel = car.status.get_energy("Fuel")
     unit = units.current()
     age = status_age_seconds(car.status)
-    updated = _updated(status_updated_at(car.status), age)
-    state = status_text.car_state_text(read(lambda: car.status.ignition.type),
-                                       read(car.status.is_moving),
-                                       read(lambda: car.status.kinetic.speed), unit)
-    subtitle = [state, " · ", *updated] if state and updated else state or updated
+    subtitle = _subtitle(car, age, unit)
     charging = None
     if car.has_battery():
         ring = _soc_ring(elec.level, elec.autonomy, unit)
