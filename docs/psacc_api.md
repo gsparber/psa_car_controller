@@ -211,3 +211,31 @@ These links will work only if PSACC is on your computer, if it isn't please repl
       `no_recent_status` (while the regular refresh runs: no status from PSA for `PSACC_HEALTH_MAX_STATUS_AGE`
       seconds, 900 by default).
     - The VIN is masked but for its last 4 characters.
+
+22. Metrics for Prometheus
+
+    http://localhost:5000/metrics
+
+    The same as `/health` and the counters of the status requests, in the Prometheus text format. Never asks PSA and
+    writes nothing: scrape it as often as you like. Counters start again at each start of PSACC. A value that isn't
+    known yet (no status, refresh not running) is left out rather than shown as 0. The `vin` label is masked but for
+    its last 4 characters.
+
+    | metric | |
+    |---|---|
+    | `psacc_api_authenticated`, `psacc_remote_control`, `psacc_mqtt_connected`, `psacc_mqtt_auth_failures` | login and MQTT |
+    | `psacc_rate_limited`, `psacc_rate_limit_retry_seconds`, `psacc_next_refresh_seconds` | PSA rate limit and next refresh |
+    | `psacc_status_last_success_timestamp_seconds`, `psacc_status_success_age_seconds` | when PSA last answered with a status |
+    | `psacc_status_data_timestamp_seconds`, `psacc_status_data_age_seconds` | when the car sent that data: a parked car sends nothing new for days |
+    | `psacc_status_consecutive_failures`, `psacc_status_outdated` | failed requests in a row |
+    | `psacc_status_requests_total{result}` | answers of PSA: `success`, `http_<status>`, `network`, `authentication` |
+    | `psacc_status_reads_total{result}` | reads without asking PSA: `cache_hit`, `cache_miss` (`from_cache=1`), `rate_limited` |
+    | `psacc_battery_level_percent`, `psacc_charging` | from the stored status |
+
+    ```yaml
+    scrape_configs:
+      - job_name: psacc
+        scrape_interval: 60s
+        static_configs:
+          - targets: ["psacc:5000"]
+    ```

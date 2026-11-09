@@ -3,7 +3,8 @@ import logging
 import threading
 import time
 from copy import copy
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from json import JSONEncoder
 from hashlib import md5
@@ -67,6 +68,10 @@ class StatusRequests:
     last_success: Optional[datetime] = None
     # "http_<status>", "network" or "authentication", None after a success
     last_error: Optional[str] = None
+    # since the start, for /metrics: answers of PSA by result ("success" or a last_error), and reads that didn't ask
+    # PSA ("cache_hit", "cache_miss", "rate_limited")
+    requests: Counter = field(default_factory=Counter)
+    reads: Counter = field(default_factory=Counter)
 
 
 def retry_after_seconds(ex: ApiException) -> Optional[int]:
@@ -235,12 +240,14 @@ class PSAClient:
         """The status of a car. cache: the stored one, PSA isn't asked. scheduled: asked by the refresh loop, which
         waits on its own after a 429; any other caller gets the stored status until the wait is over."""
         car = self.vehicles_list.get_car_by_vin(vin)
+        requests = self.status_requests(car.vin)
         if cache:
+            requests.reads["cache_miss" if car.status is None else "cache_hit"] += 1
             return car.status
         if not scheduled and self.rest_retry_in() > 0:
             logger.debug("PSA rate limit, answering with the stored status of %s", car.vin)
+            requests.reads["rate_limited"] += 1
             return car.status
-        requests = self.status_requests(car.vin)
         requests.last_attempt = datetime.now(timezone.utc)
         try:
             for _ in range(0, 2):
@@ -248,6 +255,7 @@ class PSAClient:
                     res = self.api().get_vehicle_status(car.vehicle_id)
                 except ApiException as ex:
                     requests.last_error = f"http_{ex.status}"
+                    requests.requests[requests.last_error] += 1
                     if ex.status == TOO_MANY_REQUESTS:
                         # asking again makes it worse, the refresh loop waits longer instead
                         logger.warning("Too many requests to the API, can't get the status of %s", car.vin)
@@ -264,11 +272,13 @@ class PSAClient:
                     break
                 except HTTPError as ex:
                     requests.last_error = "network"
+                    requests.requests["network"] += 1
                     logger.error("get_vehicle_info: %s", ex, exc_info_debug=True)
                     events.record(events.API, "Status request failed: %s", type(ex).__name__, vin=car.vin,
                                   level=logging.WARNING, same_as=("failed", type(ex).__name__))
                     continue
                 if res is not None:
+                    requests.requests["success"] += 1
                     if car.status_outdated:
                         logger.info("Status of %s received again", car.vin)
                     car.status_request_succeeded()
@@ -282,6 +292,7 @@ class PSAClient:
                     return car.status
         except AuthenticationRequiredException:
             requests.last_error = "authentication"
+            requests.requests["authentication"] += 1
             events.record(events.API, "Status not asked for: no valid login", vin=car.vin, level=logging.WARNING,
                           same_as=("no login",))
             raise

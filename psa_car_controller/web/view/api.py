@@ -21,6 +21,7 @@ from psa_car_controller.psacc.application.vehicle_services import MAX_TRIPS_PAGE
 from psa_car_controller.psacc.application.car_controller import PSACarController
 from psa_car_controller.psacc.application.charge_control import describe_settings
 from psa_car_controller.psacc.application.health import get_health, get_max_mqtt_auth_failures
+from psa_car_controller.psacc.application.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE, get_metrics
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.web.app import app
 
@@ -96,6 +97,15 @@ def health():
                               get_max_mqtt_auth_failures(), myp.is_authenticated() if myp else False,
                               myp.auth_problem() if myp else AUTH_LOGIN_REQUIRED, psacc=myp)
     return jsonify(body), status
+
+
+@app.route('/metrics')
+def metrics():
+    """Prometheus: never asks PSA, cheap to scrape."""
+    myp = getattr(APP, "myp", None)
+    text = get_metrics(myp, myp.remote_client if myp else None, APP.remote_control,
+                       myp.is_authenticated() if myp else False)
+    return FlaskResponse(text, mimetype=None, content_type=METRICS_CONTENT_TYPE)
 
 
 @app.route('/get_vehicles')
