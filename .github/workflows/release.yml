@@ -51,26 +51,40 @@ jobs:
        with:
          name: wheel-package
          path: dist/psa_car_controller-0.0.0-py3-none-any.whl
+  # two variants: with the browser for the headless login, and -slim without playwright and Chromium
+  # (v4.0.0-slim, v4.0-slim, v4-slim, latest-slim)
   push_to_registry:
     needs: create_release
-    name: Push Docker image to GHCR
+    name: Push Docker image to GHCR (${{ matrix.variant }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: full
+            browser: 'true'
+            suffix: ''
+          - variant: slim
+            browser: 'false'
+            suffix: '-slim'
     steps:
       - name: Prepare
         id: prep
         run: |
           DOCKER_IMAGE=ghcr.io/$(echo "${{ github.repository_owner }}/psa_car_controller" | tr '[:upper:]' '[:lower:]')
+          SUFFIX='${{ matrix.suffix }}'
           VERSION=edge
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/}
             MINOR_VERSION=${VERSION%.*}
             MAJOR=${MINOR_VERSION%.*}
-            TAGS="${DOCKER_IMAGE}:${VERSION},${DOCKER_IMAGE}:${MINOR_VERSION},${DOCKER_IMAGE}:${MAJOR},${DOCKER_IMAGE}:latest"
+            TAGS="${DOCKER_IMAGE}:${VERSION}${SUFFIX},${DOCKER_IMAGE}:${MINOR_VERSION}${SUFFIX}"
+            TAGS="${TAGS},${DOCKER_IMAGE}:${MAJOR}${SUFFIX},${DOCKER_IMAGE}:latest${SUFFIX}"
           else
-            TAGS="${DOCKER_IMAGE}:${VERSION}"
+            TAGS="${DOCKER_IMAGE}:${VERSION}${SUFFIX}"
           fi
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
@@ -101,6 +115,8 @@ jobs:
           push: true
           tags: ${{ steps.prep.outputs.tags }}
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            PSACC_BROWSER=${{ matrix.browser }}
       -
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}

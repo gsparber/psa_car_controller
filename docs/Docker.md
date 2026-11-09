@@ -45,7 +45,8 @@ A build from a branch has no release version. These optional arguments of `docke
 Build the wheel in `dist/` from the same commit, else the image shows a commit it doesn't contain. Only pass the URL if the commit is pushed, else the link ends on a 404. Without Docker, set the same names as environment variables.
 
 ### Slim image
-The images of a branch come in two variants: `<branch>` (e.g. `next`) and `<branch>-slim` (e.g. `next-slim`). The slim
+The images of a branch and of a release come in two variants: `<branch>` (e.g. `next`) and `<branch>-slim` (e.g.
+`next-slim`), `latest` and `latest-slim`, `v4.0.0` and `v4.0.0-slim` and so on. The slim
 one has no Chromium and no playwright: 854 MB instead of 1.92 GB (arm64), for small machines such as a Raspberry Pi.
 Everything works the same, except the automatic login in a local browser: the login goes through a
 [login worker](login_worker.md) on another machine, or the manual link (open it in a browser on your PC and paste the
