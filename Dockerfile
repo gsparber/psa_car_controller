@@ -26,10 +26,14 @@ ARG PSACC_BROWSER=true
 WORKDIR /config
 ENV PSACC_BASE_PATH=/ PSACC_PORT=5000 PSACC_OPTIONS="-c -r --web-conf" PSACC_CONFIG_DIR="/config" PYTHONPATH="/app"
 COPY --from=builder /install /usr/local
-# curl for the health check, and the Chromium headless shell with its dependencies for the headless login
+# curl for the health check, and the Chromium headless shell with its dependencies for the headless login. The
+# node of playwright 1.65 needs libatomic1 to run at all, before --with-deps installs anything
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
-    if [ "${PSACC_BROWSER}" = "true" ]; then playwright install --with-deps --only-shell chromium; fi && \
+    if [ "${PSACC_BROWSER}" = "true" ]; then \
+        apt-get install -y --no-install-recommends libatomic1 && \
+        playwright install --with-deps --only-shell chromium; \
+    fi && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 EXPOSE 5000
