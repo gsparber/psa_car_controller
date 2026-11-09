@@ -1,8 +1,9 @@
 name: test
 on:
-  # the other branches run it through ghcr-branch.yml, before their image
+  # every branch; renovate/** runs it in its pull request. Images are built from tags only (ghcr-branch.yml)
   push:
-    branches: [ master ]
+    branches-ignore:
+      - 'renovate/**'
   pull_request:
     branches: [ master, next ]
   workflow_call:

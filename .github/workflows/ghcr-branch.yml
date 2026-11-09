@@ -1,16 +1,16 @@
 name: Publish branch Docker image to GHCR
+# Only a version tag (next-v4.0.1) or a manual run builds images: a push to a branch runs the tests only (test.yml)
 on:
   push:
-    branches-ignore:
-      - master
-      - 'renovate/**'
+    tags:
+      - 'next-v*.*.*'
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
-# a newer push to the same branch supersedes the image being built
+# a newer run for the same tag or branch supersedes the image being built
 concurrency:
   group: ghcr-${{ github.ref }}
   cancel-in-progress: true
@@ -19,7 +19,7 @@ env:
   IMAGE_NAME: psa_car_controller
 
 jobs:
-  # no image of a commit which fails its tests; test.yml doesn't run on these pushes itself
+  # no image of a commit which fails its tests
   test:
     uses: ./.github/workflows/test.yml
     secrets: inherit
@@ -102,7 +102,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # joins the per-platform images of a variant into one multi-arch tag: <branch> and <branch>-slim
+  # joins the per-platform images: branch aliases, or versioned next tags for Renovate
   merge:
     name: Push multi-arch tags ${{ matrix.variant }}
     runs-on: ubuntu-latest
@@ -126,12 +126,24 @@ jobs:
         id: prep
         run: |
           IMAGE=ghcr.io/$(echo "${{ github.repository_owner }}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
-          # docker tags allow [a-z0-9_.-] only: feature/modern-ui -> feature-modern-ui
-          TAG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g' | cut -c1-120)
           SUFFIX='${{ matrix.suffix }}'
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            # A numeric version first lets Renovate's Docker versioning keep the next/slim variants.
+            if [[ ! "$GITHUB_REF_NAME" =~ ^next-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo "Expected a tag like next-v4.0.1" >&2
+              exit 1
+            fi
+            TAG="${GITHUB_REF_NAME#next-v}-next"
+            # next and next-slim follow the newest version: branch pushes don't build them anymore
+            TAGS="-t ${IMAGE}:${TAG}${SUFFIX} -t ${IMAGE}:next${SUFFIX}"
+          else
+            # a manual run on a branch: feature/modern-ui -> feature-modern-ui
+            TAG=$(echo "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g' | cut -c1-120)
+            TAGS="-t ${IMAGE}:${TAG}${SUFFIX} -t ${IMAGE}:${TAG}-${GITHUB_SHA::7}${SUFFIX}"
+          fi
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}${SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "tags=-t ${IMAGE}:${TAG}${SUFFIX} -t ${IMAGE}:${TAG}-${GITHUB_SHA::7}${SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Login to GHCR

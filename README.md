@@ -16,9 +16,9 @@
 
 `next` is a test version in Docker, for amd64 and arm64. There is no image for 32-bit Raspberry Pi, and the Home Assistant add-on can't use it yet.
 
-Keep your config folder: you need no new login or SMS activation. Never run two instances on the same config, they would share the same tokens. The web pages and the API have no login, so keep port 5000 inside your LAN.
+Each version comes as `4.0.0-next` and as `4.0.0-next-slim`. The slim image has no browser for the automatic login and is less than half the size, for small machines such as a Raspberry Pi: log in through a [login worker](docs/login_worker.md) or the manual link instead, see [Docker](docs/Docker.md#slim-image).
 
-**Known issue:** the home page fails while the car is charging and reports a charging rate. The other pages keep working.
+Keep your config folder: you need no new login or SMS activation. Never run two instances on the same config, they would share the same tokens. The web pages and the API have no login, so keep port 5000 inside your LAN.
 
 ### 1. Back up first
 
@@ -35,7 +35,7 @@ In `docker-compose.yml`:
 
 ```diff
 -    image: flobz/psa_car_controller:latest
-+    image: ghcr.io/gsparber/psa_car_controller:next
++    image: ghcr.io/gsparber/psa_car_controller:4.0.0-next
 ```
 
 ```
@@ -51,12 +51,12 @@ docker run -d --name psa_car_controller1 \
   --publish 5000:5000 \
   -v /host_path/config:/config \
   --restart unless-stopped \
-  ghcr.io/gsparber/psa_car_controller:next
+  ghcr.io/gsparber/psa_car_controller:4.0.0-next
 ```
 
 The header and Settings show the commit of the image. Please name it in your feedback.
 
-`next` moves: run `docker compose pull` and `docker compose up -d` again to update. To stay on one build, use a tag such as `next-ff13f1b`.
+A versioned tag such as `4.0.0-next` stays on one build, and [Renovate](https://docs.renovatebot.com/) proposes the next version (`4.0.1-next`) when there is one. The tag `next` (and `next-slim`) always moves to the newest version: with it, run `docker compose pull` and `docker compose up -d` again to update.
 
 ### What changes in your data
 
