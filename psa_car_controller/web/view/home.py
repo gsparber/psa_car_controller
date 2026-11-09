@@ -129,8 +129,10 @@ def _hero(car: Car, remote):
         html.Div([html.I(className="bi bi-incognito me-1"), privacy],
                  className="text-center text-body-secondary small privacy-line") if privacy else None,
         html.Div([picture, ring], className="hero-visual" + (" with-picture" if picture is not None else "")),
+        # one flat list: a list in the children list is no component for React, the power wasn't shown (#31)
         html.Div([html.I(className="bi bi-lightning-charge-fill me-1" if is_charging(car) else "bi bi-plug me-1"),
-                  charging], className="text-center charging-line") if charging else None,
+                  *(charging if isinstance(charging, list) else [charging])],
+                 className="text-center charging-line") if charging else None,
         html.Div(["Fuel ", ui.percent(fuel.level), " · ", *ui.distance(fuel.autonomy, unit)],
                  className="text-center text-body-secondary") if car.is_hybrid() else None,
     ], className="home-hero")

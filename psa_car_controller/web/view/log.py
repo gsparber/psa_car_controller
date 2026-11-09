@@ -148,7 +148,8 @@ def get_log_layout():
                              color="secondary", outline=True, size="sm", className="ms-auto")],
                  className="d-flex align-items-center"),
         ui.period_chips(VIEW, VIEWS, EVENTS_VIEW),
-        html.Div(ui.period_chips(CATEGORY, {ALL: "All", **CATEGORIES}, ALL), id=CATEGORY_ROW, className="mt-2"),
+        html.Div(ui.period_chips(CATEGORY, {ALL: "All", **CATEGORIES}, ALL, scroll=True), id=CATEGORY_ROW,
+                 className="mt-2"),
         html.Div(ui.period_chips(LEVEL, LEVELS, "info"), id=LEVEL_ROW, className="mt-2"),
         html.Div([dbc.Switch(id=DEBUG_SWITCH, value=is_debug(), label=_debug_label(), className="mb-0"),
                   html.Small("Everything into the log file until the next restart, also the raw messages of PSA "

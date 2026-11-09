@@ -125,6 +125,31 @@ class TestHomeShowsAge(unittest.TestCase):
         self.assertNotIn("reported", text(hero))
         self.assertNotIn("ago", text(hero))
 
+    @staticmethod
+    def nested_lists(component, where=""):
+        """Children lists holding a list: React can't render that one (minified error #31)."""
+        children = getattr(component, "children", None)
+        found = []
+        if isinstance(children, (list, tuple)):
+            for child in children:
+                if isinstance(child, (list, tuple)):
+                    found.append(where + "/" + type(component).__name__)
+                else:
+                    found += TestHomeShowsAge.nested_lists(child, where + "/" + type(component).__name__)
+        elif children is not None and not isinstance(children, str):
+            found += TestHomeShowsAge.nested_lists(children, where + "/" + type(component).__name__)
+        return found
+
+    def test_charging_with_power_is_one_flat_list(self):
+        car = get_car(datetime.now(timezone.utc))
+        car.battery_power = 50
+        charging = car.status.get_energy("Electric").charging
+        charging.status = "InProgress"
+        charging.charging_rate = 40
+        hero = self.hero(car)
+        self.assertEqual([], self.nested_lists(hero))
+        self.assertIn("kW", text(hero))
+
     def checked(self, car, last_success):
         client = MagicMock()
         client.status_requests.return_value.last_success = last_success

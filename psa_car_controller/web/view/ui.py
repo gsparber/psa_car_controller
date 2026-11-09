@@ -144,11 +144,12 @@ def flag(name):
     return html.Code(name, className="text-nowrap")
 
 
-def period_chips(chip_id, periods, value):
-    """Segmented control to pick a time range; periods is {value: label}."""
+def period_chips(chip_id, periods, value, scroll=False):
+    """Segmented control to pick a time range; periods is {value: label}. scroll: for many segments, as wide as their
+    text and scrolled sideways when they don't fit."""
     return dbc.RadioItems(id=chip_id, value=value, inline=True, persistence=True, persistence_type="local",
                           options=[{"label": label, "value": key} for key, label in periods.items()],
-                          className="segmented", inputClassName="btn-check",
+                          className="segmented segmented-scroll" if scroll else "segmented", inputClassName="btn-check",
                           labelClassName="segment", labelCheckedClassName="active")
 
 

@@ -327,6 +327,26 @@ body {
   outline: 2px solid var(--bs-primary);
 }
 
+/* Many segments (the categories of the log): as wide as their text, scrolled sideways on a phone instead of
+   squeezed on top of each other */
+.segmented.segmented-scroll {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.segmented.segmented-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.segmented.segmented-scroll .form-check {
+  flex: 1 0 auto;
+}
+
+.segmented.segmented-scroll .segment {
+  padding-left: 0.6rem;
+  padding-right: 0.6rem;
+}
+
 /* Week days of a climate schedule: seven equal round buttons */
 .day-chips {
   display: grid;
