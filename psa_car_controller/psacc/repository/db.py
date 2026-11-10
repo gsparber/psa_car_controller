@@ -342,6 +342,20 @@ class Database:
         return battery_curves
 
     @staticmethod
+    def get_last_battery_curves(vin, count) -> List[List[BatteryCurveDto]]:
+        """The battery curves of the last count charges of the car, the one going on included, oldest point first."""
+        conn = Database.get_db()
+        res = conn.execute("""SELECT start_at, date, level, rate, autonomy FROM battery_curve
+                              WHERE VIN=? AND start_at IN
+                                  (SELECT start_at FROM battery WHERE VIN=? ORDER BY start_at DESC LIMIT ?)
+                              ORDER BY start_at, date;""", (vin, vin, count)).fetchall()
+        curves = {}
+        for row in res:
+            row = dict_key_to_lower_case(**row)
+            curves.setdefault(row.pop("start_at"), []).append(BatteryCurveDto(**row))
+        return list(curves.values())
+
+    @staticmethod
     def add_altitude_to_db(conn):
         max_pos_by_req = 100
         nb_null = conn.execute("SELECT COUNT(1) FROM position WHERE altitude IS NULL "

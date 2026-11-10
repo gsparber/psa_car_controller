@@ -24,21 +24,24 @@ from psa_car_controller.psacc.application import charge_control as charge_contro
 from psa_car_controller.psacc.application.charge_control import ChargeControl, ChargeControls, CONFIRMED, GAVE_UP, \
     RETRYING, UNCONFIRMED, WATCHING, describe_settings
 from psa_car_controller.psacc.model.car import Car, Cars
+from psa_car_controller.psacc.model.battery_curve import BatteryCurveDto
 from psa_car_controller.psacc.model.car_status import CarStatus
+from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.psacc.repository.trips import as_utc
 from tests.test_remote_command_ui import text
-from tests.utils import get_web_view
+from tests.utils import get_new_test_db, get_web_view
 
 VIN = "VR3UHZKXZLT000000"
 # 0.3 % per minute, about a Mokka-e on 11 kW
 SPEED = 0.3
 
 
-def get_status(level, minutes_old=0, status=INPROGRESS, remaining_time="PT3H"):
+def get_status(level, minutes_old=0, status=INPROGRESS, remaining_time="PT3H", rate=None, autonomy=None):
     date = datetime.now(timezone.utc) - timedelta(minutes=minutes_old)
     charging = EnergyCharging(status=status, next_delayed_time="PT22H", charging_mode="Slow",
-                              remaining_time=remaining_time)
-    return CarStatus(links={}, updated_at=date,
-                     energy=[Energy(type="Electric", level=level, updated_at=date, charging=charging)])
+                              remaining_time=remaining_time, charging_rate=rate)
+    return CarStatus(links={}, updated_at=date, energy=[Energy(type="Electric", level=level, autonomy=autonomy,
+                                                               updated_at=date, charging=charging)])
 
 
 class AutoStopTestCase(unittest.TestCase):
@@ -51,7 +54,13 @@ class AutoStopTestCase(unittest.TestCase):
         self.car = Car(VIN, "vehicle-id", "Opel")
         self.psacc = MagicMock()
         self.psacc.vehicles_list = Cars([self.car])
-        self.psacc.refresh_delay = 300
+        # 3 minutes between refreshes: the level is estimated 0.5 + 1.5 minutes ahead
+        self.psacc.refresh_delay = 180
+        # the charges recorded before, to learn from
+        self.curves = []
+        patcher = patch.object(Database, "get_last_battery_curves", side_effect=lambda vin, count: self.curves)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         # the status after the stop: what the car does with it
         self.after_stop = None
         self.psacc.get_vehicle_info.side_effect = self.answer
@@ -153,7 +162,7 @@ class TestStopNearTheLimit(AutoStopTestCase):
         with self.assertLogs("psa_car_controller.psacc.application.charge_control", "DEBUG") as logs:
             self.charging_since(cc, [68, 72, 76], last_minutes_old=10)
         line = [message for message in logs.output if "estimate of" in message][0]
-        for expected in ("79.7 %", "76 % reported 10.0 min ago", "3 reports, 68 → 76 % in 26 min", "limit 80 %"):
+        for expected in ("79.7 %", "76 % first reported 10.0 min ago", "3 levels, 68 → 76 % in 26 min", "limit 80 %"):
             self.assertIn(expected, line)
 
     def test_why_there_is_no_estimate_is_in_the_debug_log(self):
@@ -170,6 +179,172 @@ class TestStopNearTheLimit(AutoStopTestCase):
         # only one level of this charge and no remaining time: no estimate, the fast old charge doesn't count
         self.assertIsNone(cc.estimated_level(self.car.status))
         self.assertEqual(0, self.stops())
+
+
+def e208_charge_of_10_nov():
+    """The battery curve recorded on 10 Nov 2026 (e-208, 11 kW wallbox), first report of each level: (minutes after
+    08:30 UTC+1, level, rate in km/h, range in km). 11 kW up to 47 %, then about 7.5 kW; the stop at 80 % was sent
+    at 78 % + 9.9 min * 0.200 %/min = 80.4 % (4 levels in 15 minutes) and the car ended at 81 %."""
+    points = [(0.8, 28, 64, 64), (43.9, 47, 50, 110), (44.8, 48, 50, 112), (73.9, 56, 42, 138), (74.7, 57, 50, 140),
+              (96.2, 62, 42, 156), (96.9, 63, 42, 156), (114.0, 67, 42, 170), (128.1, 71, 42, 180),
+              (142.2, 74, 42, 190), (143.0, 75, 42, 192), (156.2, 78, 42, 202), (168.3, 81, 0, 212)]
+    start = datetime(2026, 11, 10, 7, 30, tzinfo=timezone.utc)
+    return [BatteryCurveDto(start + timedelta(minutes=minutes), level, rate, autonomy)
+            for minutes, level, rate, autonomy in points]
+
+
+class TestSpeedOfTheCharge(AutoStopTestCase):
+    """How fast the charge goes: from the charging rate the car sends, as much of it as the last charges showed."""
+
+    def setUp(self):
+        super().setUp()
+        self.after_stop = get_status(80, status=STOPPED)
+
+    def test_from_the_charging_rate(self):
+        # 42 km/h, 204 km at 78 %: 2.6 km per %, 0.268 % per minute
+        cc = self.charge_control()
+        self.report(cc, 78, minutes_old=1, rate=42, autonomy=204)
+        self.assertAlmostEqual(78 + 42 * 78 / 204 / 60 * 3, cc.estimated_level(self.car.status), places=2)
+
+    def test_a_lower_power_counts_at_once(self):
+        # GIVEN the levels of the 11 kW part: 0.44 % per minute
+        cc = self.charge_control()
+        self.charging_since(cc, [28, 47], last_minutes_old=0)
+        # WHEN the car reports 7.5 kW: 42 km/h instead of 64
+        self.report(cc, 48, rate=42, autonomy=112)
+        # THEN the estimate goes with it, not with the levels
+        self.assertAlmostEqual(48 + 42 * 48 / 112 / 60 * 2, cc.estimated_level(self.car.status), places=2)
+
+    def test_from_the_levels_without_a_rate(self):
+        # every 13 minutes 4 %, for more than LEVEL_WINDOW_MINUTES: the old ones go, the one before the window stays
+        cc = self.charge_control()
+        for level in (36, 40, 44, 48, 52, 56):
+            cc._record_level(get_status(level, minutes_old=(56 - level) / 4 * 13).get_energy("Electric"))
+        self.assertEqual([40, 44, 48, 52, 56], [level for _, level in cc._level_points])
+
+    def test_the_same_level_again_isnt_a_new_one(self):
+        # after a wakeup the car reports the same level twice: the first report says when it was reached
+        cc = self.charge_control()
+        self.assertTrue(cc._record_level(get_status(78, minutes_old=2).get_energy("Electric")))
+        self.assertFalse(cc._record_level(get_status(78, minutes_old=1).get_energy("Electric")))
+        self.assertEqual(1, len(cc._level_points))
+        # so 2 minutes from the first report of 78 %, not 1 from the last one
+        self.report(cc, 78, minutes_old=1, rate=42, autonomy=204)
+        self.assertAlmostEqual(78 + 42 * 78 / 204 / 60 * 4, cc.estimated_level(self.car.status), places=1)
+
+    def test_learned_from_the_charges_recorded(self):
+        # 10 Nov: 53 % in 168 minutes, where the rate promised 58 %
+        self.curves = [e208_charge_of_10_nov()]
+        cc = self.charge_control()
+        cc.learn_speed_factor()
+        self.assertAlmostEqual(0.91, cc._speed_factor, places=2)
+        self.assertEqual("learned from 53 % in 1 charges", cc._speed_factor_source)
+
+    def test_learned_when_a_level_is_new(self):
+        self.curves = [e208_charge_of_10_nov()]
+        cc = self.charge_control()
+        self.report(cc, 60, rate=42, autonomy=150)
+        self.assertAlmostEqual(0.91, cc._speed_factor, places=2)
+        self.curves = []
+        self.report(cc, 60, rate=42, autonomy=150)
+        self.assertAlmostEqual(0.91, cc._speed_factor, places=2)
+
+    def test_not_learned_from_too_little(self):
+        self.curves = [e208_charge_of_10_nov()[-4:]]
+        cc = self.charge_control()
+        cc.learn_speed_factor()
+        self.assertEqual(1.0, cc._speed_factor)
+        self.assertEqual("not learned, 7 % recorded", cc._speed_factor_source)
+
+    def test_gaps_and_missing_rates_dont_count(self):
+        start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+        self.curves = [[BatteryCurveDto(start, 20, 40, 100),
+                        BatteryCurveDto(start + timedelta(minutes=90), 50, None, 250),
+                        BatteryCurveDto(start + timedelta(minutes=100), 55, 0, 270),
+                        BatteryCurveDto(start + timedelta(minutes=110), 60, 0, 290)]]
+        cc = self.charge_control()
+        cc.learn_speed_factor()
+        self.assertEqual("not learned, 0 % recorded", cc._speed_factor_source)
+
+    def test_bounded(self):
+        start = datetime(2026, 11, 1, tzinfo=timezone.utc)
+        # 20 % in 20 minutes where the rate promised 2 %
+        self.curves = [[BatteryCurveDto(start + timedelta(minutes=minutes), 20 + minutes, 6, 100)
+                        for minutes in range(21)]]
+        cc = self.charge_control()
+        cc.learn_speed_factor()
+        self.assertEqual(ChargeControl.SPEED_FACTOR_RANGE[1], cc._speed_factor)
+
+    def test_without_a_database(self):
+        cc = self.charge_control()
+        with patch.object(Database, "get_last_battery_curves", side_effect=OSError("no database")):
+            cc.learn_speed_factor()
+        self.assertEqual(1.0, cc._speed_factor)
+
+    def test_the_rate_is_in_the_debug_log(self):
+        cc = self.charge_control()
+        with self.assertLogs("psa_car_controller.psacc.application.charge_control", "DEBUG") as logs:
+            self.report(cc, 78, rate=42, autonomy=204)
+        line = [message for message in logs.output if "estimate of" in message][0]
+        self.assertIn("rate 42 km/h, 204 km at 78 %, x 1.00 (not learned, 0 % recorded)", line)
+
+
+class TestStopOf10Nov(AutoStopTestCase):
+    """The charge of 10 Nov again, refreshed every 2 minutes: 78 % first reported at 10:06:09 UTC, then the car slept.
+    It charged about 0.25 % per minute, so it was at 80 % around 10:14."""
+
+    def setUp(self):
+        super().setUp()
+        self.after_stop = get_status(80, status=STOPPED)
+        self.psacc.refresh_delay = 120
+        self.curves = [e208_charge_of_10_nov()[:-1]]
+
+    def refresh(self, cc, minutes_after_78):
+        now = datetime.now(timezone.utc)
+        cc._level_points = [(now - timedelta(minutes=minutes_after_78), 78)]
+        # the last report of 78 %, 1.9 minutes after the first
+        self.report(cc, 78, minutes_old=minutes_after_78 - 1.9, rate=42, autonomy=204)
+
+    def test_stops_at_80_not_81(self):
+        cc = self.charge_control()
+        cc.learn_speed_factor()
+        # 10:11:54: 78 % + 5.75 min * 0.244 = 79.4 %, 79.8 % with the lead of 1.5 min
+        self.refresh(cc, 5.75)
+        self.assertEqual(0, self.stops())
+        # 10:13:54: 80.3 % with the lead, the car stops about 80 % (before: at 10:17:56, 81 %)
+        self.refresh(cc, 7.75)
+        self.assertEqual(1, self.stops())
+
+    def test_lead(self):
+        cc = self.charge_control()
+        self.assertEqual(1.5, cc.lead_minutes())
+        self.psacc.refresh_delay = 3600
+        self.assertEqual(ChargeControl.STOP_DELAY_MINUTES + ChargeControl.MAX_REFRESH_LEAD_MINUTES / 2,
+                         cc.lead_minutes())
+        self.psacc.refresh_delay = None
+        self.assertEqual(ChargeControl.STOP_DELAY_MINUTES, cc.lead_minutes())
+
+
+class TestLastBatteryCurves(unittest.TestCase):
+    """What the speed of the charge is learned from: the curves the charges recorded, in the database."""
+
+    def test_last_charges_with_the_one_going_on(self):
+        conn = get_new_test_db()
+        self.addCleanup(Database.close_db)
+        start = datetime(2026, 11, 1, 7, 0, tzinfo=timezone.utc)
+        for day in range(3):
+            start_at = start + timedelta(days=day)
+            conn.execute("INSERT INTO battery(start_at, VIN, start_level) VALUES(?,?,?)", (start_at, VIN, 20))
+            for minute in (0, 15):
+                conn.execute("INSERT INTO battery_curve(start_at,VIN,date,level,rate,autonomy) VALUES(?,?,?,?,?,?)",
+                             (start_at, VIN, start_at + timedelta(minutes=minute), 20 + minute, 42, 100))
+        conn.execute("INSERT INTO battery_curve(start_at,VIN,date,level,rate,autonomy) VALUES(?,?,?,?,?,?)",
+                     (start, "OTHER", start, 30, 42, 100))
+        conn.commit()
+        curves = Database.get_last_battery_curves(VIN, 2)
+        self.assertEqual(2, len(curves))
+        self.assertEqual([[20, 35], [20, 35]], [[point.level for point in curve] for curve in curves])
+        self.assertEqual(start + timedelta(days=2, minutes=15), as_utc(curves[-1][-1].date))
 
 
 class TestStopNotFollowed(AutoStopTestCase):
@@ -247,7 +422,8 @@ class TestStopNotFollowed(AutoStopTestCase):
         self.report(cc, 60)
         data = cc.get_dict()
         self.assertEqual(WATCHING, data["auto_stop"]["phase"])
-        for name in ("_last_stop_at", "_level_points", "_state", "psacc", "_last_wakeup"):
+        for name in ("_last_stop_at", "_level_points", "_speed_factor", "_speed_factor_source", "_state", "psacc",
+                     "_last_wakeup"):
             self.assertNotIn(name, data)
 
     def test_events_dont_repeat_while_watching(self):

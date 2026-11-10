@@ -39,7 +39,10 @@ These links will work only if PSACC is on your computer, if it isn't please repl
 
    The car reports its level only every 10-15 minutes while charging, so the charge ends a few % above the limit.
    Optional, also on the charge page under Advanced:
-   - `estimate=1`: stop when the level estimated from how fast it rose reaches the limit (`0`: off, the default).
+   - `estimate=1`: stop when the estimated level reaches the limit (`0`: off, the default). The speed comes from
+     the charging rate the car sends, corrected by what the last 10 recorded charges really gained; without a
+     rate, from the levels of the last 45 minutes. The level is estimated half a refresh ahead, so the charge
+     ends about as often a little below the limit as above it.
    - `margin=5`: without the estimate, stop 5 % before the limit, at 75 % for 80 % (0 to 20, 0 by default).
 
    The answer has `auto_stop`: what the automatic stop does now (`phase`: `watching`, `waiting`, `confirmed`,

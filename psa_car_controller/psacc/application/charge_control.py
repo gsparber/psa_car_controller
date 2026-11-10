@@ -11,6 +11,8 @@ from psa_car_controller.common import events
 from psa_car_controller.psa.constants import DISCONNECTED, INPROGRESS, FINISHED, STOPPED
 from psa_car_controller.psa.mqtt_event import mqtt_charging_status
 from psa_car_controller.common.utils import RateLimitException, atomic_write, parse_hour
+from psa_car_controller.psacc.repository.db import Database
+from psa_car_controller.psacc.repository.trips import as_utc
 from .psa_client import PSAClient
 
 logger = logging.getLogger(__name__)
@@ -62,13 +64,27 @@ class ChargeControl:
     LATE_RETRY_INTERVAL = 15
     MAX_STOP_ATTEMPTS = 4
     # The car sends its level only every 10-15 minutes while charging (a Mokka-e: about 4 % each time), so waiting
-    # for it to report the limit ends the charge a few % above. The level is estimated from how fast it rose:
+    # for it to report the limit ends the charge a few % above. The level is estimated from how fast it rises:
     # not further than this from the last report, the car is woken up instead,
     MAX_ESTIMATE_MINUTES = 30
-    # and a little ahead, for the stop to reach the car and for the next refresh
-    STOP_LEAD_MINUTES = 2
-    # the last levels reported during the charge give its speed: about 40 minutes, the charge slows down near 100 %
-    MAX_LEVEL_POINTS = 4
+    # and a little ahead: the car stopped about 20 s after the stop was sent (e-208, 10 Nov 2026),
+    STOP_DELAY_MINUTES = 0.5
+    # plus half the time to the next refresh, so the charge ends as often a little below the limit as above it
+    # (with the whole of it, always below). Not more than this, a refresh can be put off a long time.
+    MAX_REFRESH_LEAD_MINUTES = 10
+    # How fast the charge goes comes from the charging rate the car sends (km of range per hour): it changes as soon
+    # as the power does (an e-208 on 10 Nov 2026: 64 km/h up to 47 %, 50 up to 56 %, then 42, so 11 kW then about
+    # 7.5 kW). How much of it ends up in the battery is learned from the levels of the last charges recorded:
+    LEARN_CHARGES = 10
+    # with at least this many % over them, else all of it. Steps between two levels further apart than this say
+    # nothing about the rate, the car didn't report in between.
+    MIN_LEARN_LEVELS = 10
+    MAX_LEARN_GAP_MINUTES = 60
+    SPEED_FACTOR_RANGE = (0.5, 1.5)
+    # Without a rate, the speed comes from the levels of the last minutes of this charge: the first report of
+    # each one, the car reports the same level twice after a wakeup. 4 reports were about 15 minutes, too short
+    # for levels in whole %: 3 % or 4 % in 15 minutes changed the speed by a quarter.
+    LEVEL_WINDOW_MINUTES = 45
     # largest stop_margin, in %
     MAX_STOP_MARGIN = 20
 
@@ -83,8 +99,11 @@ class ChargeControl:
         self.wakeup_timeout = 10
         self._last_wakeup = None
         self._last_stop_at = None
-        # (date of the level, level) during the current charge
+        # (date the level was first reported, level) during the current charge
         self._level_points = []
+        # share of the charging rate that ends up in the battery, learned from the last charges
+        self._speed_factor = 1.0
+        self._speed_factor_source = "not learned yet"
         self._state = None
 
     def set_estimate(self, estimate, stop_margin=0):
@@ -189,25 +208,76 @@ class ChargeControl:
     def _reason_text(reason):
         return {REASON_LIMIT: "battery limit", REASON_STOP_HOUR: "stop time"}.get(reason, "charge control")
 
-    def _record_level(self, electric):
-        """Keep the levels of this charge, they tell how fast it goes."""
+    def _record_level(self, electric) -> bool:
+        """Keep the levels of this charge, they tell how fast it goes: the first report of each one, over the last
+        LEVEL_WINDOW_MINUTES and the one before. True for a new level."""
         updated_at = getattr(electric, "updated_at", None)
         level = getattr(electric, "level", None)
         if not isinstance(updated_at, datetime) or not isinstance(level, (int, float)):
+            return False
+        if self._level_points and (self._level_points[-1][0] >= updated_at or self._level_points[-1][1] == level):
+            return False
+        points = self._level_points + [(updated_at, level)]
+        window_start = updated_at - timedelta(minutes=self.LEVEL_WINDOW_MINUTES)
+        while len(points) > 2 and points[1][0] <= window_start:
+            points.pop(0)
+        self._level_points = points
+        return True
+
+    @staticmethod
+    def _rate_speed(level, rate, autonomy):
+        """% per minute from the charging rate in km of range per hour: 1 % is autonomy / level km. None when a
+        value is missing or zero."""
+        values = (level, rate, autonomy)
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 for v in values):
+            return None
+        return rate * level / autonomy / 60
+
+    def learn_speed_factor(self):
+        """How much of the charging rate ended up in the battery over the last charges recorded: the % they gained
+        between two levels against the % their rate promised."""
+        try:
+            curves = Database.get_last_battery_curves(self.vin, self.LEARN_CHARGES)
+        except Exception as e:  # pylint: disable=broad-except
+            # no database, or none yet: the estimate works without it
+            logger.debug("speed of the charge of %s not learned: %s", self.vin, e)
             return
-        if self._level_points and self._level_points[-1][0] >= updated_at:
+        gained = expected = 0
+        for curve in curves:
+            for start, end in zip(curve, curve[1:]):
+                speed = self._rate_speed(start.level, start.rate, start.autonomy)
+                try:
+                    minutes = (as_utc(end.date) - as_utc(start.date)).total_seconds() / 60
+                    gain = end.level - start.level
+                except (AttributeError, TypeError):
+                    continue
+                if speed is None or not 0 < minutes <= self.MAX_LEARN_GAP_MINUTES or gain <= 0:
+                    continue
+                gained += gain
+                expected += speed * minutes
+        if gained < self.MIN_LEARN_LEVELS:
+            self._speed_factor, self._speed_factor_source = 1.0, f"not learned, {gained} % recorded"
             return
-        self._level_points = (self._level_points + [(updated_at, level)])[-self.MAX_LEVEL_POINTS:]
+        low, high = self.SPEED_FACTOR_RANGE
+        self._speed_factor = min(max(gained / expected, low), high)
+        self._speed_factor_source = f"learned from {gained} % in {len(curves)} charges"
 
     def _percent_per_minute(self, electric):
-        """(speed of the charge in % per minute, where it comes from): from the levels reported during it, else from
-        the time left to 100 %; (None, why not) if neither tells."""
+        """(speed of the charge in % per minute, where it comes from): from the charging rate, else from the levels
+        reported during it, else from the time left to 100 %; (None, why not) if none tells."""
+        rate = getattr(getattr(electric, "charging", None), "charging_rate", None)
+        autonomy = getattr(electric, "autonomy", None)
+        speed = self._rate_speed(getattr(electric, "level", None), rate, autonomy)
+        if speed is not None:
+            return speed * self._speed_factor, \
+                f"rate {rate} km/h, {autonomy} km at {electric.level} %, x {self._speed_factor:.2f} " \
+                f"({self._speed_factor_source})"
         if len(self._level_points) >= 2:
             (first_at, first_level), (last_at, last_level) = self._level_points[0], self._level_points[-1]
             minutes = (last_at - first_at).total_seconds() / 60
             if minutes >= 10 and last_level > first_level:
                 return (last_level - first_level) / minutes, \
-                    f"{len(self._level_points)} reports, {first_level} → {last_level} % in {minutes:.0f} min"
+                    f"{len(self._level_points)} levels, {first_level} → {last_level} % in {minutes:.0f} min"
         try:
             level = float(electric.level)
             remaining = parse_hour(electric.charging.remaining_time)
@@ -218,9 +288,15 @@ class ChargeControl:
             return None, "too few reports and no remaining time"
         return (100 - level) / remaining_minutes, f"remaining time {electric.charging.remaining_time} to 100 %"
 
+    def lead_minutes(self):
+        """How far ahead the level is estimated: until the car stops, and half the time to the next refresh."""
+        refresh = getattr(self.psacc, "refresh_delay", 0)
+        refresh_minutes = refresh / 60 if isinstance(refresh, (int, float)) and refresh > 0 else 0
+        return self.STOP_DELAY_MINUTES + min(refresh_minutes, self.MAX_REFRESH_LEAD_MINUTES) / 2
+
     def estimated_level(self, vehicle_status):
-        """Battery level now plus STOP_LEAD_MINUTES, from the last one reported and the speed of the charge; None
-        when it can't be estimated. How it was estimated goes to the debug log."""
+        """Battery level lead_minutes() from now, from the last one reported and the speed of the charge; None when
+        it can't be estimated. How it was estimated goes to the debug log."""
         electric = vehicle_status.get_energy('Electric')
         minutes = self._minutes_since_update(vehicle_status)
         speed, source = self._percent_per_minute(electric)
@@ -229,13 +305,17 @@ class ChargeControl:
                          source if speed is None else f"last report {minutes:.0f} min ago, over "
                          f"{self.MAX_ESTIMATE_MINUTES} min")
             return None
+        # the level is whole %: it rose from the first report of it, the later ones of it only say it's not higher
+        if self._level_points and self._level_points[-1][1] == electric.level:
+            minutes = max(minutes, (datetime.now(UTC) - self._level_points[-1][0]).total_seconds() / 60)
+        lead = self.lead_minutes()
         try:
-            estimated = min(float(electric.level) + speed * (minutes + self.STOP_LEAD_MINUTES), 100)
+            estimated = min(float(electric.level) + speed * (minutes + lead), 100)
         except (TypeError, ValueError):
             return None
-        logger.debug("estimate of %s: %.1f %% = %s %% reported %.1f min ago + %.3f %%/min (%s) * (%.1f + %d min "
-                     "ahead), limit %s %%", self.vin, estimated, electric.level, minutes, speed, source, minutes,
-                     self.STOP_LEAD_MINUTES, self.percentage_threshold)
+        logger.debug("estimate of %s: %.1f %% = %s %% first reported %.1f min ago + %.3f %%/min (%s) * (%.1f + "
+                     "%.1f min ahead), limit %s %%", self.vin, estimated, electric.level, minutes, speed, source,
+                     minutes, lead, self.percentage_threshold)
         return estimated
 
     def _late_retry_due(self, now_utc: datetime):
@@ -313,18 +393,19 @@ class ChargeControl:
         return min(max(min_timeout, (minutes_to_threshold - minutes_since_update) / 2), max_timeout)
 
     def _minutes_to_threshold(self, electric):
-        """Estimated from the remaining time to a full battery; None if it can't be estimated."""
+        """Estimated from the speed of the charge; None if it can't be estimated."""
         try:
             level = float(electric.level)
-            remaining = parse_hour(electric.charging.remaining_time)
-            remaining_minutes = remaining[0] * 60 + remaining[1] + remaining[2] / 60
-        except (AttributeError, TypeError, ValueError, IndexError):
+        except (AttributeError, TypeError, ValueError):
             return None
-        if remaining_minutes <= 0 or level >= 100 or level >= self.stop_level():
+        if level >= 100 or level >= self.stop_level():
             return None
-        # charging slows down near 100 %, so below the threshold the car charges faster than this
-        # linear estimate: wakeup_interval() only waits for half of it
-        return (self.stop_level() - level) * remaining_minutes / (100 - level)
+        speed, _ = self._percent_per_minute(electric)
+        if speed is None:
+            return None
+        # the power can still change (and from the remaining time to 100 %, the charge slows down near 100 %, so
+        # below the threshold the car charges faster than that): wakeup_interval() only waits for half of it
+        return (self.stop_level() - level) / speed
 
     def __is_approaching_scheduled_time(self, now: datetime):
         try:
@@ -376,8 +457,7 @@ class ChargeControl:
             has_threshold = self.percentage_threshold < 100
             estimated = None
             if status == INPROGRESS and not outdated and not stale:
-                self._record_level(vehicle_status.get_energy('Electric'))
-                estimated = self.estimated_level(vehicle_status) if has_threshold and self.estimate else None
+                estimated = self._follow_charge(vehicle_status, has_threshold)
             elif status != INPROGRESS:
                 self._level_points = []
             # An outdated level says nothing: the car may have been driven and plugged in again since
@@ -422,6 +502,16 @@ class ChargeControl:
         except BaseException:
             logger.exception("Charge control:")
 
+    def _follow_charge(self, vehicle_status, has_threshold):
+        """A new status of the charge: keep its level, the estimated level when it's on (else None)."""
+        new_level = self._record_level(vehicle_status.get_energy('Electric'))
+        if not has_threshold or not self.estimate:
+            return None
+        if new_level:
+            # this charge is recorded too: what it showed so far counts
+            self.learn_speed_factor()
+        return self.estimated_level(vehicle_status)
+
     def _control_limit(self, level, estimated, hit_threshold, too_old) -> bool:
         """During a charge: stop it at the limit, again later if the car didn't follow. True if a stop was sent."""
         has_threshold = self.percentage_threshold < 100
@@ -456,7 +546,7 @@ class ChargeControl:
             targets.append(f"at {self._next_stop_hour:%H:%M}")
         text = f"Charging, stops {' or '.join(targets)}: battery {level} %"
         if estimated is not None:
-            text += f", about {estimated:.0f} % in {self.STOP_LEAD_MINUTES} min"
+            text += f", about {estimated:.0f} % in {self.lead_minutes():g} min"
         if too_old:
             text += " (the level is too old to decide from, the car is woken up)"
         return text
@@ -476,7 +566,7 @@ class ChargeControl:
         chd = copy(self.__dict__)
         chd.pop("psacc")
         chd.pop("_last_wakeup")
-        for name in ("_last_stop_at", "_level_points", "_state"):
+        for name in ("_last_stop_at", "_level_points", "_speed_factor", "_speed_factor_source", "_state"):
             chd.pop(name, None)
         chd["auto_stop"] = self.get_state()
         return chd
