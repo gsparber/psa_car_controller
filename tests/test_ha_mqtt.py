@@ -3,6 +3,7 @@ to the user's own broker. The paho client is a mock, no broker is needed."""
 import json
 import logging
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -303,3 +304,62 @@ class TestCommands(HomeAssistantTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestDatesAndAutoStop(HomeAssistantTestCase):
+    """Car reported and Status checked tell a parked car from a stalled PSACC, Automatic stop shows charge control."""
+
+    def state(self, key):
+        return self.published().get(f"psa_car_controller/{NODE}/{key}/state", (None,))[0]
+
+    def config_of(self, key):
+        payload = self.published().get(f"homeassistant/sensor/{NODE}/{key}/config")
+        return json.loads(payload[0]) if payload else None
+
+    def test_dates(self):
+        checked = datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc)
+        self.psacc.status_requests = lambda vin: SimpleNamespace(last_success=checked)
+        self.connect()
+        for key in ("data_updated", "status_checked"):
+            config = self.config_of(key)
+            self.assertEqual("timestamp", config["device_class"])
+            self.assertEqual("diagnostic", config["entity_category"])
+        self.assertEqual(checked.isoformat(), self.state("status_checked"))
+        reported = datetime.fromisoformat(self.state("data_updated"))
+        self.assertIsNotNone(reported.tzinfo)
+
+    def test_unknown_dates_are_not_published(self):
+        self.car.status = None
+        self.connect()
+        self.assertIsNone(self.state("data_updated"))
+        self.assertIsNone(self.state("status_checked"))
+
+    def test_auto_stop(self):
+        self.charge_control.get_state = lambda: {
+            "phase": "waiting", "reason": "limit", "attempts": 1, "since": "2026-11-10T08:00:00+00:00",
+            "message": "Stop sent (battery limit), attempt 1", "command": {"status": "woken_up", "error": None}}
+        self.connect()
+        self.assertEqual("mdi:battery-charging-high", self.config_of("auto_stop")["icon"])
+        self.assertEqual("waiting", self.state("auto_stop"))
+        attributes = json.loads(self.published()[f"psa_car_controller/{NODE}/auto_stop/attributes"][0])
+        self.assertEqual(("woken_up", 1, "limit"),
+                         (attributes["command_status"], attributes["attempts"], attributes["reason"]))
+
+    def test_auto_stop_with_nothing_to_do_is_off(self):
+        self.charge_control.get_state = lambda: None
+        self.connect()
+        self.assertEqual("off", self.state("auto_stop"))
+
+    def test_no_auto_stop_without_charge_control(self):
+        self.charge_controls = None
+        self.connect()
+        self.assertIsNone(self.config_of("auto_stop"))
+        self.assertIsNone(self.state("auto_stop"))
+
+    def test_auto_stop_follows_the_phase(self):
+        phase = {"value": "watching"}
+        self.charge_control.get_state = lambda: {"phase": phase["value"]}
+        self.connect()
+        phase["value"] = "confirmed"
+        self.ha.publish_states()
+        self.assertEqual("confirmed", self.state("auto_stop"))

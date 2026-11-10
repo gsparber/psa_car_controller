@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
@@ -20,6 +21,7 @@ from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.remote_commands import RemoteCommand
 from psa_car_controller.psa.setup.worker_oauth import is_local_host
 from psa_car_controller.psacc.model.car import Car
+from psa_car_controller.psacc.model.car_status import status_updated_at
 from psa_car_controller.psacc.repository.config_repository import HomeAssistantMqttConfig
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,13 @@ SENSORS = {
     "climate_status": {"name": "Climate status", "icon": "mdi:air-conditioner"},
     "last_command": {"name": "Last command", "icon": "mdi:remote", "entity_category": "diagnostic",
                      "json_attributes": True},
+    # a parked car sends nothing new for days while PSA answers every refresh: the two dates tell that apart
+    "data_updated": {"name": "Car reported", "device_class": "timestamp", "entity_category": "diagnostic"},
+    "status_checked": {"name": "Status checked", "device_class": "timestamp", "entity_category": "diagnostic"},
 }
+# only with charge control: off, watching, waiting, confirmed, unconfirmed, retrying or gave_up (charge_control.py)
+AUTO_STOP = {"name": "Automatic stop", "icon": "mdi:battery-charging-high", "json_attributes": True}
+AUTO_STOP_OFF = "off"
 BUTTONS = {
     "wakeup": {"name": "Wake up", "icon": "mdi:refresh"},
     "horn": {"name": "Horn", "icon": "mdi:bullhorn"},
@@ -425,6 +433,8 @@ class HomeAssistantMqtt:
             entities += [("switch", key, fields) for key, fields in SWITCHES.items() if wanted(key)]
             if self._charge_control(car.vin) is not None:
                 entities += [("number", key, fields) for key, fields in NUMBERS.items() if wanted(key)]
+        if car.has_battery() and self._charge_control(car.vin) is not None:
+            entities.append(("sensor", "auto_stop", AUTO_STOP))
         return entities
 
     def _device(self, car: Car, node: str) -> dict:
@@ -478,6 +488,29 @@ class HomeAssistantMqtt:
                     self._publish(f"{self.base}/{node}/location/attributes", value)
                 else:
                     self._publish(f"{self.base}/{node}/{key}/state", state_text(value))
+            self._publish_dates(car, node)
+            if charge_control is not None and car.has_battery():
+                self._publish_auto_stop(charge_control, node)
+
+    def _publish_dates(self, car: Car, node):
+        dates = {"data_updated": _read(lambda: status_updated_at(car.status)) if car.status is not None else None,
+                 "status_checked": _read(lambda: self.psacc.status_requests(car.vin).last_success)}
+        for key, date in dates.items():
+            if isinstance(date, datetime):
+                # Home Assistant wants a time zone; the car's dates without one are UTC
+                date = date if date.tzinfo is not None else date.replace(tzinfo=timezone.utc)
+                self._publish(f"{self.base}/{node}/{key}/state", date.isoformat())
+
+    def _publish_auto_stop(self, charge_control, node):
+        state = _read(lambda: charge_control.get_state())  # pylint: disable=unnecessary-lambda
+        if not isinstance(state, dict):
+            state = {}
+        command = state.get("command") or {}
+        self._publish(f"{self.base}/{node}/auto_stop/attributes", {
+            "message": state.get("message"), "reason": state.get("reason"), "attempts": state.get("attempts"),
+            "since": state.get("since"), "command_status": command.get("status"),
+            "command_error": command.get("error")})
+        self._publish(f"{self.base}/{node}/auto_stop/state", state.get("phase") or AUTO_STOP_OFF)
 
     def publish_command(self, command: RemoteCommand):
         """State of the last command of a car (sent, woken_up, success, failed, timeout...)."""

@@ -63,6 +63,9 @@ One device per car. Values are metric (%, km, kW): Home Assistant converts them 
 | Charging | switch | start / stop charging |
 | Climate | switch | preconditioning on / off |
 | Charge limit | number | threshold of PSACC's charge control, only when it runs (`-c`) |
+| Automatic stop | sensor | only with charge control: `off`, `watching`, `waiting` (stop sent), `confirmed`, `unconfirmed`, `retrying`, `gave_up`; attributes: message, reason, attempts, since, command_status, command_error |
+| Car reported | sensor (diagnostic) | timestamp: when the car last sent its data. A parked car sends nothing new for days |
+| Status checked | sensor (diagnostic) | timestamp: when PSA last answered with the status. Old while PSACC can't reach PSA |
 
 The controls are only offered when remote control is enabled (no `--remote-disable` / `--offline`). They use the same
 code as the web UI and the API, with the same limits:
