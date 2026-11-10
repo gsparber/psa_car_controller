@@ -1,5 +1,6 @@
 import logging
 from collections import OrderedDict
+from datetime import datetime
 
 import dash_bootstrap_components as dbc
 from dash import html
@@ -25,6 +26,32 @@ def _at_click(config, method):
     def call(*args):
         return method(config.myp)(*args)
     return call
+
+
+def _read(getter):
+    """A leaf of the status, None if the API didn't send the part it is in."""
+    try:
+        return getter()
+    except (AttributeError, TypeError):
+        return None
+
+
+def _remote_buttons(config, car):
+    """Refresh, charge and preconditioning. Each value is read on its own: a status without the preconditioning part
+    used to leave out all three buttons. A switch whose state is unknown is off."""
+    preconditionning = _read(lambda: car.status.preconditionning.air_conditioning.status)
+    charging = _read(lambda: car.status.get_energy('Electric').charging.status)
+    updated_at = _read(lambda: car.status.get_energy('Electric').updated_at)
+    refresh_date = ui.local_time(updated_at, updated_at.astimezone().strftime("%X %x"), "locale") \
+        if isinstance(updated_at, datetime) else None
+    return [Button(REFRESH_SWITCH, car.vin,
+                   html.Div([html.Img(src=dash_app.get_asset_url("images/sync.svg"), width="50px"), refresh_date]),
+                   _at_click(config, lambda myp: myp.remote_client.wakeup)).get_html(),
+            Switch(CHARGE_SWITCH, car.vin, "Charge", _at_click(config, lambda myp: myp.remote_client.charge_now),
+                   charging == "InProgress").get_html(),
+            Switch(PRECONDITIONING_SWITCH, car.vin, "Preconditioning",
+                   _at_click(config, lambda myp: myp.remote_client.preconditioning),
+                   preconditionning not in (None, "Disabled")).get_html()]
 
 
 def get_control_tabs(config):
@@ -53,27 +80,7 @@ def get_control_tabs(config):
                 cards.move_to_end("Mileage")
             el.append(dbc.Container(dbc.Row(children=create_card(cards)), fluid=True))
             if config.remote_control:
-                try:
-                    preconditionning_state = car.status.preconditionning.air_conditioning.status != "Disabled"
-                    charging_state = car.status.get_energy('Electric').charging.status == "InProgress"
-
-                    updated_at = car.status.get_energy('Electric').updated_at
-                    refresh_date = ui.local_time(updated_at, updated_at.astimezone().strftime("%X %x"), "locale")
-                    buttons_row.extend([Button(REFRESH_SWITCH, car.vin,
-                                               html.Div([
-                                                   html.Img(src=dash_app.get_asset_url("images/sync.svg"),
-                                                            width="50px"),
-                                                   refresh_date
-                                               ]),
-                                               _at_click(config, lambda myp: myp.remote_client.wakeup)).get_html(),
-                                        Switch(CHARGE_SWITCH, car.vin, "Charge",
-                                               _at_click(config, lambda myp: myp.remote_client.charge_now),
-                                               charging_state).get_html(),
-                                        Switch(PRECONDITIONING_SWITCH, car.vin, "Preconditioning",
-                                               _at_click(config, lambda myp: myp.remote_client.preconditioning),
-                                               preconditionning_state).get_html()])
-                except (AttributeError, TypeError):
-                    logger.exception("get_control_tabs:")
+                buttons_row.extend(_remote_buttons(config, car))
         if not config.offline:
             buttons_row.append(Switch(ABRP_SWITCH, car.vin, "Send data to ABRP",
                                       _at_click(config, lambda myp: myp.abrp.enable_abrp),
