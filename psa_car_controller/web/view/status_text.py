@@ -7,6 +7,7 @@ import math
 from datetime import datetime, timezone
 
 from psa_car_controller.common.utils import parse_hour
+from psa_car_controller.psacc.application import charge_speed
 from psa_car_controller.web import units
 
 PRECOND_STATES = {"Enabled": "On", "Disabled": "Off", "Finished": "Finished", "Failure": "Failed"}
@@ -66,14 +67,11 @@ def charging_text(plugged, status, remaining):
     return None
 
 
-def charge_power_kw(rate_kmh, battery_kwh, level, range_km):
-    """Charging power estimated from the car's charging rate, which is range gained per hour (km/h), times the energy
-    a km currently takes (battery size x level / range). None when a value is missing or zero."""
-    values = (rate_kmh, battery_kwh, level, range_km)
-    if not all(_is_number(v) and v > 0 for v in values):
-        return None
-    kwh_per_km = battery_kwh * level / 100 / range_km
-    return rate_kmh * kwh_per_km
+def charge_power_kw(rate_kmh, battery_kwh, level, range_km, kwh_per_km=None):
+    """Charging power estimated from the car's charging rate, which is range gained per hour (km/h): times the kWh
+    per km of rate learned from the last charges (charge_speed.py), else times the energy a km currently takes
+    (battery size x level / range). None when a value is missing or zero."""
+    return charge_speed.power_kw(rate_kmh, battery_kwh, level, range_km, kwh_per_km)
 
 
 def precond_text(status):

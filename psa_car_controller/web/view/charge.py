@@ -6,6 +6,7 @@ from dash import dcc, html
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
+from psa_car_controller.psacc.application import charge_speed
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.model.car import Cars
 from psa_car_controller.web import units
@@ -49,7 +50,9 @@ def _status(car, pending):
     text = status_text.charging_text(read(lambda: elec.charging.plugged), read(lambda: elec.charging.status),
                                      read(lambda: elec.charging.remaining_time)) or "–"
     power = status_text.charge_power_kw(read(lambda: elec.charging.charging_rate), car.battery_power,
-                                        elec.level, elec.autonomy) if charging_now else None
+                                        elec.level, elec.autonomy,
+                                        charge_speed.kwh_per_rate_km(car.vin, car.battery_power)) \
+        if charging_now else None
     label = [dbc.Spinner(size="sm", spinner_class_name="me-2"),
              "Auto-stop: waiting for car…" if by_auto_stop else "Waiting for car…"] if waiting else \
         [html.I(className="bi bi-stop-circle me-2" if charging_now else "bi bi-play-circle me-2"),

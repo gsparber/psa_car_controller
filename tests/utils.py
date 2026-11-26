@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from dash import html
 
 from psa_car_controller.psa.RemoteClient import RemoteClient
+from psa_car_controller.psacc.application import charge_speed
 from psa_car_controller.psacc.application.charging import Charging
 from psa_car_controller.psacc.model.car import Cars, Car
 from psa_car_controller.psacc.repository.db import Database
@@ -64,6 +65,8 @@ car = vehicule_list[0]
 
 
 def get_new_test_db():
+    # a value learned from the charges of another test database must not be used
+    charge_speed.clear_cache()
     Database.close_db()
     conn = Database.get_db(force_new_conn=True, db_file="")
     return conn

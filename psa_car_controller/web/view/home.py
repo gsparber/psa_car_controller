@@ -7,6 +7,7 @@ from dash import dcc, html
 from dash.dependencies import Input, Output, State
 from dash.exceptions import PreventUpdate
 
+from psa_car_controller.psacc.application import charge_speed
 from psa_car_controller.psacc.application.vehicle_picture import get_vehicle_picture
 from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.model.car_status import status_age_seconds, status_updated_at
@@ -108,7 +109,9 @@ def _hero(car: Car, remote):
         charging = status_text.charging_text(read(lambda: elec.charging.plugged), read(lambda: elec.charging.status),
                                              read(lambda: elec.charging.remaining_time))
         power = status_text.charge_power_kw(read(lambda: elec.charging.charging_rate), car.battery_power,
-                                            elec.level, elec.autonomy) if is_charging(car) else None
+                                            elec.level, elec.autonomy,
+                                            charge_speed.kwh_per_rate_km(car.vin, car.battery_power)) \
+            if is_charging(car) else None
         if power:
             charging = [f"{charging} · ", *ui.power(power)]
     else:

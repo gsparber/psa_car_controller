@@ -4,10 +4,12 @@ from sqlite3 import IntegrityError
 
 from typing import List
 
+from . import charge_speed
 from .battery_charge_curve import BatteryChargeCurve
 from .ecomix import Ecomix
 from .trip_parser import TripParser
 
+from psa_car_controller.common.sensitive_filter import mask_value
 from psa_car_controller.psacc.repository.config_repository import ElectricityPriceConfig
 from psa_car_controller.psacc.repository.db import Database
 from psa_car_controller.psacc.repository.trips import MIN_SLOW_GAP_KM, Trips, as_utc
@@ -18,6 +20,11 @@ logger = logging.getLogger(__name__)
 
 # over a longer gap with km in it the levels no longer say what happened in between. Without km it can only be a charge
 MAX_ESTIMATED_CHARGE_GAP = timedelta(hours=72)
+# A car that charges reports its level every 10-15 minutes. When it reported none for longer than this before the
+# charge ended, the level of the status that ends it can be the old one with a new date: a Mokka-e on 14 Oct 2026
+# reported 32 % at 11:42 UTC and nothing more, its charge ended at 13:32 with "32 %", 6.4 kWh, where the charging
+# station billed 19.45 kWh. Its end level is estimated from the charging rate of the last report then.
+STALE_END_LEVEL = timedelta(minutes=30)
 
 
 class Charging:
@@ -131,6 +138,30 @@ class Charging:
         return charge.mileage is not None and mileage is not None and mileage - charge.mileage > MIN_SLOW_GAP_KM
 
     @staticmethod
+    def _end_level(conn, charge: Charge, car, stop_at, level):
+        """The level at the end of the charge: the one of the status that ends it, else, when the car reported no new
+        one for longer than STALE_END_LEVEL while it charged, the last one reported plus what its charging rate gives
+        until the end, not above 100 %."""
+        try:
+            curve = Database.get_battery_curve(conn, charge.start_at, stop_at, charge.vin)
+            last = curve[-1]
+            minutes = (as_utc(stop_at) - as_utc(last.date)).total_seconds() / 60
+            stale = level is not None and last.level is not None and level <= last.level
+        except (IndexError, AttributeError, TypeError):
+            return level
+        if not stale or minutes < STALE_END_LEVEL.total_seconds() / 60:
+            return level
+        kw = charge_speed.power_kw(last.rate, car.battery_power, last.level, last.autonomy,
+                                   charge_speed.kwh_per_rate_km(charge.vin, car.battery_power))
+        if kw is None:
+            return level
+        estimated = max(min(round(last.level + kw * minutes / 60 / car.battery_power * 100), 100), level)
+        logger.info("No level reported for %.0f minutes before the end of the charge of %s, %s %% at the end is the"
+                    " old one: %s %% estimated from %s %% and %.1f kW", minutes, mask_value(charge.vin), level,
+                    estimated, last.level, kw)
+        return estimated
+
+    @staticmethod
     # pylint: disable-next=too-many-positional-arguments
     def _close_charge(conn, charge: Charge, car, charge_date, level, latitude,
                       longitude, country_code, mileage):
@@ -146,6 +177,8 @@ class Charging:
                     charge.stop_at = stop_at
                     Database.delete_charge(conn, charge)
                     return
+        else:
+            level = Charging._end_level(conn, charge, car, stop_at, level)
         charge.end_level = level
         charge.co2 = Ecomix.get_co2_per_kw(charge.start_at, stop_at, latitude, longitude, country_code)
         charge.kw = (level - charge.start_level) / 100 * car.battery_power

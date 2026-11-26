@@ -20,6 +20,7 @@ import paho.mqtt.client as mqtt
 from psa_car_controller.common.utils import RateLimitException
 from psa_car_controller.psa.remote_commands import RemoteCommand
 from psa_car_controller.psa.setup.worker_oauth import is_local_host
+from psa_car_controller.psacc.application import charge_speed
 from psa_car_controller.psacc.model.car import Car
 from psa_car_controller.psacc.model.car_status import status_updated_at
 from psa_car_controller.psacc.repository.config_repository import HomeAssistantMqttConfig
@@ -92,15 +93,6 @@ def node_id(vin: str) -> str:
     return "psacc_" + hashlib.sha256(vin.encode("utf-8")).hexdigest()[:12]
 
 
-def charge_power_kw(rate_kmh, battery_kwh, level, range_km):
-    """Estimated like the home page does (web/view/status_text.py, not imported: it would load the Dash app): the
-    charging rate is range gained per hour, times the energy a km currently takes."""
-    values = (rate_kmh, battery_kwh, level, range_km)
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 for v in values):
-        return None
-    return rate_kmh * battery_kwh * level / 100 / range_km
-
-
 def state_text(value) -> str:
     """59.0 as "59": the API gives whole numbers as floats."""
     if isinstance(value, float) and value.is_integer():
@@ -133,7 +125,9 @@ def car_states(car: Car, charge_limit=None) -> Dict[str, object]:
         states["charging"] = None if charging_status is None else (ON if charging_status == "InProgress" else OFF)
         power = None
         if charging_status == "InProgress":
-            power = charge_power_kw(_read(lambda: elec.charging.charging_rate), car.battery_power, level, autonomy)
+            rate = _read(lambda: elec.charging.charging_rate)
+            power = charge_speed.power_kw(rate, car.battery_power, level, autonomy,
+                                          charge_speed.kwh_per_rate_km(car.vin, car.battery_power))
         states["charging_power"] = round(power, 2) if power is not None else (0 if charging_status else None)
         states["charge_limit"] = charge_limit
     if car.has_fuel():
